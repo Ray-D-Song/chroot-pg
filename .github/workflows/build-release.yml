@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   build:
@@ -98,3 +99,32 @@ jobs:
             gh release create "$RELEASE_TAG" dist/chroot-pg-*-linux-amd64.tar.gz dist/SHA256SUMS \
               --title "chroot-pg $RELEASE_TAG" --generate-notes
           fi
+
+  cleanup-failed-artifacts:
+    name: Remove artifacts from failed runs
+    needs: [build, verify-centos7-kernel310, release]
+    if: >-
+      ${{
+        always() &&
+        (
+          needs.build.result != 'success' ||
+          needs.verify-centos7-kernel310.result != 'success' ||
+          needs.release.result == 'failure' ||
+          needs.release.result == 'cancelled'
+        )
+      }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Delete artifacts created by this failed run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --jq '.artifacts[].id' |
+            while read -r artifact_id; do
+              test -n "$artifact_id" || continue
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id"
+              echo "Deleted artifact $artifact_id from failed run $GITHUB_RUN_ID"
+            done
