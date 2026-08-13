@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOTFS=''
+DATA_DIR=''
+RUN_UID=''
+RUN_GID=''
+PORT=''
+LISTEN_ADDRESSES=''
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --rootfs|--data-dir|--uid|--gid|--port|--listen-addresses)
+      key="$1"; shift; [[ $# -gt 0 ]] || { echo "missing value for $key" >&2; exit 2; }
+      case "$key" in
+        --rootfs) ROOTFS="$1" ;;
+        --data-dir) DATA_DIR="$1" ;;
+        --uid) RUN_UID="$1" ;;
+        --gid) RUN_GID="$1" ;;
+        --port) PORT="$1" ;;
+        --listen-addresses) LISTEN_ADDRESSES="$1" ;;
+      esac
+      shift ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+[[ $EUID -eq 0 ]] || { echo 'chroot-pg-run must be run by root' >&2; exit 1; }
+[[ -d "$ROOTFS" && -d "$DATA_DIR" ]] || { echo 'rootfs or data directory does not exist' >&2; exit 1; }
+[[ "$RUN_UID" =~ ^[0-9]+$ && "$RUN_GID" =~ ^[0-9]+$ && "$PORT" =~ ^[0-9]+$ ]] || { echo 'invalid numeric argument' >&2; exit 2; }
+[[ "$LISTEN_ADDRESSES" =~ ^[a-zA-Z0-9.,:*_-]+$ ]] || { echo 'invalid listen addresses' >&2; exit 2; }
+
+target_data="$ROOTFS/var/lib/postgresql/data"
+mkdir -p "$target_data" "$ROOTFS/dev/shm"
+mount --bind "$DATA_DIR" "$target_data"
+mount --bind /dev/shm "$ROOTFS/dev/shm"
+
+exec chroot --userspec="$RUN_UID:$RUN_GID" "$ROOTFS" \
+  /usr/lib/postgresql/17/bin/postgres -D /var/lib/postgresql/data \
+  -c "port=$PORT" -c "listen_addresses=$LISTEN_ADDRESSES"
+

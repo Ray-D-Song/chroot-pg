@@ -1,0 +1,21 @@
+[Unit]
+Description=chroot-pg PostgreSQL 17
+After=network.target local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+MountFlags=private
+ExecStart=@PREFIX@/bin/chroot-pg-run --rootfs @PREFIX@/rootfs --data-dir @DATA_DIR@ --uid @RUN_UID@ --gid @RUN_GID@ --port @PORT@ --listen-addresses @LISTEN_ADDRESSES@
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGINT
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+
