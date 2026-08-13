@@ -75,9 +75,31 @@ jobs:
       - name: Run real service smoke test
         run: sudo -E bash tests/smoke-test.sh "$(find dist -name 'chroot-pg-*-linux-amd64.tar.gz' -print -quit)" "$GITHUB_RUN_ID"
 
+  verify-ubuntu24:
+    name: Verify on Ubuntu 24.04
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: chroot-pg-release
+          path: dist
+      - name: Validate required host capabilities
+        run: |
+          test "$(uname -m)" = x86_64
+          command -v systemctl
+          sudo -n true
+      - name: Verify package checksum
+        run: (cd dist && sha256sum --check SHA256SUMS)
+      - name: Run real service smoke test
+        run: sudo -E bash tests/smoke-test.sh "$(find dist -name 'chroot-pg-*-linux-amd64.tar.gz' -print -quit)" "$GITHUB_RUN_ID"
+
   release:
     name: Create GitHub Release
-    needs: verify-centos7-kernel310
+    needs: [verify-ubuntu24, verify-centos7-kernel310]
     if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release) }}
     runs-on: ubuntu-24.04
     permissions:
@@ -100,17 +122,22 @@ jobs:
               --title "chroot-pg $RELEASE_TAG" --generate-notes
           fi
 
-  cleanup-failed-artifacts:
-    name: Remove artifacts from failed runs
-    needs: [build, verify-centos7-kernel310, release]
+  cleanup-artifacts:
+    name: Remove artifacts from non-release or failed runs
+    needs: [build, verify-ubuntu24, verify-centos7-kernel310, release]
     if: >-
       ${{
         always() &&
         (
           needs.build.result != 'success' ||
+          needs.verify-ubuntu24.result != 'success' ||
           needs.verify-centos7-kernel310.result != 'success' ||
           needs.release.result == 'failure' ||
-          needs.release.result == 'cancelled'
+          needs.release.result == 'cancelled' ||
+          !(
+            startsWith(github.ref, 'refs/tags/v') ||
+            (github.event_name == 'workflow_dispatch' && inputs.release)
+          )
         )
       }}
     runs-on: ubuntu-24.04
