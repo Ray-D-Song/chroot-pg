@@ -29,6 +29,8 @@ PACKAGE_DIR="$(find "$WORK_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 [[ -n "$PACKAGE_DIR" ]] || { echo 'bundle root directory missing' >&2; exit 1; }
 "$PACKAGE_DIR/install.sh" --prefix "$PREFIX" --data-dir "$DATA_DIR" --service-name "$SERVICE" --credentials-file "$CREDENTIALS" --port "$PORT" --listen-addresses 127.0.0.1
 systemctl is-active --quiet "$SERVICE"
+[[ "$(grep -c '^# BEGIN chroot-pg managed settings$' "$DATA_DIR/data/pg_hba.conf")" == 1 ]] || { echo 'managed pg_hba block is missing or duplicated' >&2; exit 1; }
+[[ ! -e "$DATA_DIR/pg_hba.conf" && ! -e "$DATA_DIR/postgresql.conf" ]] || { echo 'configuration was written outside PGDATA' >&2; exit 1; }
 
 source "$CREDENTIALS"
 wait_for_postgres() {
@@ -43,6 +45,11 @@ wait_for_postgres() {
 }
 
 wait_for_postgres
+# The rules must live in the running cluster's pg_hba.conf, not merely on disk
+# somewhere: a loopback-only smoke test would otherwise pass without them.
+PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -tAc \
+  "select count(*) from pg_hba_file_rules where type = 'host' and auth_method = 'scram-sha-256' and netmask in ('0.0.0.0', '::') and error is null" \
+  | grep -Fx 2
 PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -v ON_ERROR_STOP=1 \
   -c 'create table ci_smoke(id integer primary key, note text)' -c "insert into ci_smoke values (1, 'ok')" -c 'select * from ci_smoke'
 systemctl restart "$SERVICE"

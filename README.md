@@ -22,6 +22,8 @@ sudo cat /etc/chroot-pg/credentials
 
 默认监听 `0.0.0.0:5432`，远程认证使用 SCRAM 密码。安装生成随机 `postgres` 密码；生产使用前必须通过防火墙和 `pg_hba.conf` 限制来源地址。
 
+数据库集群位于数据目录下的 `data` 子目录，例如 `/var/lib/chroot-pg/data/data`。`install.sh` 在该集群的 `postgresql.conf` 与 `pg_hba.conf` 末尾维护一段 `# BEGIN chroot-pg managed settings` 到 `# END chroot-pg managed settings` 的区块，每次安装都会重写它。自定义配置请写在区块之外；`pg_hba.conf` 先匹配先生效，收紧来源地址时把自己的规则放在区块之前。
+
 可覆盖默认值：
 
 ```bash

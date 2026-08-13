@@ -85,6 +85,47 @@ ensure_chroot_identity "$PREFIX/rootfs"
 install -d -o "$RUN_UID" -g "$RUN_GID" -m 0755 "$PREFIX/rootfs/run/postgresql"
 
 PGDATA_HOST="$DATA_DIR/data"
+MANAGED_BEGIN='# BEGIN chroot-pg managed settings'
+MANAGED_END='# END chroot-pg managed settings'
+# Settings the installer owns. Everything outside the delimiters is left alone,
+# so reinstalls refresh our block instead of stacking duplicates.
+write_managed_block() {
+  local target="$1" tmp
+  [[ -f "$target" ]] || { echo "missing configuration file: $target" >&2; exit 1; }
+  tmp="$(mktemp)"
+  awk -v head="$MANAGED_BEGIN" -v tail="$MANAGED_END" '
+    $0 == head { inside = 1; next }
+    $0 == tail { inside = 0; next }
+    inside == 0 { print }
+  ' "$target" > "$tmp"
+  { printf '%s\n' "$MANAGED_BEGIN"; cat; printf '%s\n' "$MANAGED_END"; } >> "$tmp"
+  cat "$tmp" > "$target"
+  rm -f "$tmp"
+  chown "$RUN_UID:$RUN_GID" "$target"
+  chmod 0600 "$target"
+}
+
+apply_managed_settings() {
+  write_managed_block "$PGDATA_HOST/postgresql.conf" <<EOF
+listen_addresses = '$LISTEN_ADDRESSES'
+port = $PORT
+password_encryption = 'scram-sha-256'
+EOF
+  write_managed_block "$PGDATA_HOST/pg_hba.conf" <<'EOF'
+host all all 0.0.0.0/0 scram-sha-256
+host all all ::0/0 scram-sha-256
+EOF
+}
+
+# Earlier installs wrote these settings beside PGDATA instead of inside it,
+# where PostgreSQL never reads them. Drop the leftovers, but only when they
+# hold nothing except those ignored lines.
+discard_stray_conf() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+  grep -qvE "^[[:space:]]*$|^listen_addresses = |^port = [0-9]+$|^password_encryption = 'scram-sha-256'$|^host all all (0\.0\.0\.0/0|::0/0) scram-sha-256$" "$file" \
+    || rm -f "$file"
+}
 
 if [[ ! -f "$PGDATA_HOST/PG_VERSION" ]]; then
   password="$(openssl rand -base64 36 | tr -d '\n')"
@@ -118,21 +159,16 @@ EOF
     -D /var/lib/postgresql/data --username=postgres --pwfile=/var/lib/postgresql/.init-password \
     --auth-host=scram-sha-256 --auth-local=peer --no-instructions
   rm -f "$password_file"
-  cat >> "$DATA_DIR/postgresql.conf" <<EOF
-listen_addresses = '$LISTEN_ADDRESSES'
-port = $PORT
-password_encryption = 'scram-sha-256'
-EOF
-  cat >> "$DATA_DIR/pg_hba.conf" <<'EOF'
-host all all 0.0.0.0/0 scram-sha-256
-host all all ::0/0 scram-sha-256
-EOF
   cleanup_mounts
   trap - EXIT
   echo "Generated PostgreSQL password. It is stored in $CREDENTIALS (root only)."
 else
   [[ -f "$CREDENTIALS" ]] || { echo "existing data directory requires credentials file: $CREDENTIALS" >&2; exit 1; }
 fi
+
+apply_managed_settings
+discard_stray_conf "$DATA_DIR/postgresql.conf"
+discard_stray_conf "$DATA_DIR/pg_hba.conf"
 
 sed -e "s|@PREFIX@|$PREFIX|g" -e "s|@DATA_DIR@|$DATA_DIR|g" \
   -e "s|@RUN_UID@|$RUN_UID|g" -e "s|@RUN_GID@|$RUN_GID|g" \
