@@ -67,7 +67,7 @@ jobs:
       - name: Validate required host capabilities
         run: |
           test "$(uname -m)" = x86_64
-          test "$(uname -r)" = 3.10.*
+          [[ "$(uname -r)" == 3.10.* ]]
           command -v systemctl
           sudo -n true
       - name: Verify package checksum
