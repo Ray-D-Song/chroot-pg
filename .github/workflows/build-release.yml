@@ -43,7 +43,7 @@ jobs:
         run: sudo bash scripts/package.sh "${{ inputs.tag || github.ref_name }}"
       - name: Verify package integrity
         run: |
-          sha256sum --check dist/SHA256SUMS
+          (cd dist && sha256sum --check SHA256SUMS)
           tar -tzf dist/chroot-pg-*-linux-amd64.tar.gz | grep -E '/rootfs/usr/lib/postgresql/17/bin/postgres$'
       - uses: actions/upload-artifact@v4
         with:
