@@ -40,7 +40,7 @@ jobs:
       - name: Verify rootfs
         run: sudo bash tests/verify-rootfs.sh build/rootfs
       - name: Create offline package
-        run: bash scripts/package.sh "${{ inputs.tag || github.ref_name }}"
+        run: sudo bash scripts/package.sh "${{ inputs.tag || github.ref_name }}"
       - name: Verify package integrity
         run: |
           sha256sum --check dist/SHA256SUMS
