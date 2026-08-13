@@ -17,7 +17,7 @@ cleanup() {
     "$PACKAGE_DIR/uninstall.sh" --prefix "$PREFIX" --data-dir "$DATA_DIR" --service-name "$SERVICE" --credentials-file "$CREDENTIALS" --purge-data || true
   fi
   umount "$PREFIX/rootfs/dev/shm" 2>/dev/null || true
-  umount "$PREFIX/rootfs/var/lib/postgresql/data" 2>/dev/null || true
+  umount "$PREFIX/rootfs/var/lib/postgresql" 2>/dev/null || true
   rm -rf "$PREFIX" "$DATA_DIR" "$(dirname "$CREDENTIALS")"
   rm -rf "$WORK_DIR"
 }
@@ -40,7 +40,7 @@ PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.
 systemctl restart "$SERVICE"
 PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -tAc 'select note from ci_smoke where id = 1' | grep -Fx ok
 "$PACKAGE_DIR/uninstall.sh" --prefix "$PREFIX" --data-dir "$DATA_DIR" --service-name "$SERVICE" --credentials-file "$CREDENTIALS"
-[[ -f "$DATA_DIR/PG_VERSION" ]] || { echo 'uninstall unexpectedly removed database data' >&2; exit 1; }
+[[ -f "$DATA_DIR/data/PG_VERSION" ]] || { echo 'uninstall unexpectedly removed database data' >&2; exit 1; }
 "$PACKAGE_DIR/uninstall.sh" --prefix "$PREFIX" --data-dir "$DATA_DIR" --service-name "$SERVICE" --credentials-file "$CREDENTIALS" --purge-data
 [[ ! -e "$DATA_DIR" ]] || { echo 'purge-data did not remove test data' >&2; exit 1; }
 echo 'chroot-pg smoke test passed'

@@ -80,8 +80,13 @@ if [[ -d "$PREFIX/rootfs" ]]; then rm -rf "$PREFIX/rootfs"; fi
 mv "$new_rootfs" "$PREFIX/rootfs"
 install -D -m 0755 "$SCRIPT_DIR/bin/chroot-pg-run" "$PREFIX/bin/chroot-pg-run"
 ensure_chroot_identity "$PREFIX/rootfs"
+# PostgreSQL creates its local socket and lock files below /var/run/postgresql
+# (a link to /run on Debian). This directory must match the host runtime UID.
+install -d -o "$RUN_UID" -g "$RUN_GID" -m 0755 "$PREFIX/rootfs/run/postgresql"
 
-if [[ ! -f "$DATA_DIR/PG_VERSION" ]]; then
+PGDATA_HOST="$DATA_DIR/data"
+
+if [[ ! -f "$PGDATA_HOST/PG_VERSION" ]]; then
   password="$(openssl rand -base64 36 | tr -d '\n')"
   umask 077
   cat > "$CREDENTIALS" <<EOF
@@ -89,13 +94,18 @@ POSTGRES_USER=postgres
 POSTGRES_PASSWORD=$password
 POSTGRES_PORT=$PORT
 EOF
-  install -d -m 0755 "$PREFIX/rootfs/var/lib/postgresql/data" "$PREFIX/rootfs/dev/shm"
-  mount --bind "$DATA_DIR" "$PREFIX/rootfs/var/lib/postgresql/data"
+  # PostgreSQL refuses to initialise a cluster directly on a mount point. Bind
+  # the persistent directory to its parent, then keep the cluster in `data/`.
+  install -d -m 0755 "$PGDATA_HOST" "$PREFIX/rootfs/var/lib/postgresql" "$PREFIX/rootfs/dev/shm"
+  chown "$RUN_UID:$RUN_GID" "$PGDATA_HOST"
+  mount --bind "$DATA_DIR" "$PREFIX/rootfs/var/lib/postgresql"
   mount --bind /dev/shm "$PREFIX/rootfs/dev/shm"
+  # Keep the temporary password file outside PGDATA: initdb requires its target
+  # directory to be empty, including hidden files.
   password_file="$DATA_DIR/.init-password"
   cleanup_mounts() {
     umount "$PREFIX/rootfs/dev/shm" 2>/dev/null || true
-    umount "$PREFIX/rootfs/var/lib/postgresql/data" 2>/dev/null || true
+    umount "$PREFIX/rootfs/var/lib/postgresql" 2>/dev/null || true
   }
   rollback_initialization() {
     cleanup_mounts
@@ -105,7 +115,7 @@ EOF
   printf '%s\n' "$password" > "$password_file"
   chown "$RUN_UID:$RUN_GID" "$password_file"; chmod 0600 "$password_file"
   chroot --userspec="$RUN_UID:$RUN_GID" "$PREFIX/rootfs" /usr/lib/postgresql/17/bin/initdb \
-    -D /var/lib/postgresql/data --username=postgres --pwfile=/var/lib/postgresql/data/.init-password \
+    -D /var/lib/postgresql/data --username=postgres --pwfile=/var/lib/postgresql/.init-password \
     --auth-host=scram-sha-256 --auth-local=peer --no-instructions
   rm -f "$password_file"
   cat >> "$DATA_DIR/postgresql.conf" <<EOF

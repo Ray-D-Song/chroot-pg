@@ -30,12 +30,11 @@ done
 [[ "$RUN_UID" =~ ^[0-9]+$ && "$RUN_GID" =~ ^[0-9]+$ && "$PORT" =~ ^[0-9]+$ ]] || { echo 'invalid numeric argument' >&2; exit 2; }
 [[ "$LISTEN_ADDRESSES" =~ ^[a-zA-Z0-9.,:*_-]+$ ]] || { echo 'invalid listen addresses' >&2; exit 2; }
 
-target_data="$ROOTFS/var/lib/postgresql/data"
-mkdir -p "$target_data" "$ROOTFS/dev/shm"
-mount --bind "$DATA_DIR" "$target_data"
+target_pg_base="$ROOTFS/var/lib/postgresql"
+mkdir -p "$DATA_DIR/data" "$target_pg_base" "$ROOTFS/dev/shm"
+mount --bind "$DATA_DIR" "$target_pg_base"
 mount --bind /dev/shm "$ROOTFS/dev/shm"
 
 exec chroot --userspec="$RUN_UID:$RUN_GID" "$ROOTFS" \
   /usr/lib/postgresql/17/bin/postgres -D /var/lib/postgresql/data \
   -c "port=$PORT" -c "listen_addresses=$LISTEN_ADDRESSES"
-
