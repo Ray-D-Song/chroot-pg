@@ -31,13 +31,22 @@ PACKAGE_DIR="$(find "$WORK_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 systemctl is-active --quiet "$SERVICE"
 
 source "$CREDENTIALS"
-for _ in $(seq 1 30); do
-  if PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/pg_isready" -h 127.0.0.1 -p "$PORT" -U postgres; then break; fi
-  sleep 1
-done
+wait_for_postgres() {
+  for _ in $(seq 1 30); do
+    if PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/pg_isready" -h 127.0.0.1 -p "$PORT" -U postgres; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "PostgreSQL did not become ready on port $PORT" >&2
+  return 1
+}
+
+wait_for_postgres
 PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -v ON_ERROR_STOP=1 \
   -c 'create table ci_smoke(id integer primary key, note text)' -c "insert into ci_smoke values (1, 'ok')" -c 'select * from ci_smoke'
 systemctl restart "$SERVICE"
+wait_for_postgres
 PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -tAc 'select note from ci_smoke where id = 1' | grep -Fx ok
 "$PACKAGE_DIR/uninstall.sh" --prefix "$PREFIX" --data-dir "$DATA_DIR" --service-name "$SERVICE" --credentials-file "$CREDENTIALS"
 [[ -f "$DATA_DIR/data/PG_VERSION" ]] || { echo 'uninstall unexpectedly removed database data' >&2; exit 1; }
