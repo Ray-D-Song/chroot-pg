@@ -10,11 +10,15 @@ SERVICE="chroot-pg-test-$TEST_ID"
 PORT="$(( 20000 + RANDOM % 20000 ))"
 CREDENTIALS="/etc/chroot-pg-test-$TEST_ID/credentials"
 PG_BIN='/usr/lib/postgresql/17/bin'
+PACKAGE_DIR=''
 
 cleanup() {
-  if [[ -d "$WORK_DIR" && -x "$WORK_DIR"/*/uninstall.sh ]]; then
-    "$WORK_DIR"/*/uninstall.sh --prefix "$PREFIX" --data-dir "$DATA_DIR" --service-name "$SERVICE" --credentials-file "$CREDENTIALS" --purge-data || true
+  if [[ -n "$PACKAGE_DIR" && -x "$PACKAGE_DIR/uninstall.sh" ]]; then
+    "$PACKAGE_DIR/uninstall.sh" --prefix "$PREFIX" --data-dir "$DATA_DIR" --service-name "$SERVICE" --credentials-file "$CREDENTIALS" --purge-data || true
   fi
+  umount "$PREFIX/rootfs/dev/shm" 2>/dev/null || true
+  umount "$PREFIX/rootfs/var/lib/postgresql/data" 2>/dev/null || true
+  rm -rf "$PREFIX" "$DATA_DIR" "$(dirname "$CREDENTIALS")"
   rm -rf "$WORK_DIR"
 }
 trap cleanup EXIT

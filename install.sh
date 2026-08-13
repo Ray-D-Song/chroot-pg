@@ -57,6 +57,17 @@ fi
 RUN_UID="$(id -u "$RUN_USER")"
 RUN_GID="$(id -g "$RUN_USER")"
 
+ensure_chroot_identity() {
+  local rootfs="$1"
+  if ! awk -F: -v gid="$RUN_GID" '$3 == gid { found=1 } END { exit !found }' "$rootfs/etc/group"; then
+    printf '%s:x:%s:\n' "$RUN_USER" "$RUN_GID" >> "$rootfs/etc/group"
+  fi
+  if ! awk -F: -v uid="$RUN_UID" '$3 == uid { found=1 } END { exit !found }' "$rootfs/etc/passwd"; then
+    printf '%s:x:%s:%s:chroot-pg runtime:/nonexistent:/usr/sbin/nologin\n' \
+      "$RUN_USER" "$RUN_UID" "$RUN_GID" >> "$rootfs/etc/passwd"
+  fi
+}
+
 if systemctl is-active --quiet "$SERVICE_NAME"; then systemctl stop "$SERVICE_NAME"; fi
 mkdir -p "$PREFIX" "$DATA_DIR" "$(dirname "$CREDENTIALS")"
 chmod 0750 "$(dirname "$CREDENTIALS")"
@@ -68,6 +79,7 @@ cp -a "$SOURCE_ROOTFS" "$new_rootfs"
 if [[ -d "$PREFIX/rootfs" ]]; then rm -rf "$PREFIX/rootfs"; fi
 mv "$new_rootfs" "$PREFIX/rootfs"
 install -D -m 0755 "$SCRIPT_DIR/bin/chroot-pg-run" "$PREFIX/bin/chroot-pg-run"
+ensure_chroot_identity "$PREFIX/rootfs"
 
 if [[ ! -f "$DATA_DIR/PG_VERSION" ]]; then
   password="$(openssl rand -base64 36 | tr -d '\n')"
@@ -80,9 +92,16 @@ EOF
   install -d -m 0755 "$PREFIX/rootfs/var/lib/postgresql/data" "$PREFIX/rootfs/dev/shm"
   mount --bind "$DATA_DIR" "$PREFIX/rootfs/var/lib/postgresql/data"
   mount --bind /dev/shm "$PREFIX/rootfs/dev/shm"
-  cleanup_mounts() { umount "$PREFIX/rootfs/dev/shm" || true; umount "$PREFIX/rootfs/var/lib/postgresql/data" || true; }
-  trap cleanup_mounts EXIT
   password_file="$DATA_DIR/.init-password"
+  cleanup_mounts() {
+    umount "$PREFIX/rootfs/dev/shm" 2>/dev/null || true
+    umount "$PREFIX/rootfs/var/lib/postgresql/data" 2>/dev/null || true
+  }
+  rollback_initialization() {
+    cleanup_mounts
+    rm -f "$password_file"
+  }
+  trap rollback_initialization EXIT
   printf '%s\n' "$password" > "$password_file"
   chown "$RUN_UID:$RUN_GID" "$password_file"; chmod 0600 "$password_file"
   chroot --userspec="$RUN_UID:$RUN_GID" "$PREFIX/rootfs" /usr/lib/postgresql/17/bin/initdb \
@@ -98,7 +117,8 @@ EOF
 host all all 0.0.0.0/0 scram-sha-256
 host all all ::0/0 scram-sha-256
 EOF
-  cleanup_mounts; trap - EXIT
+  cleanup_mounts
+  trap - EXIT
   echo "Generated PostgreSQL password. It is stored in $CREDENTIALS (root only)."
 else
   [[ -f "$CREDENTIALS" ]] || { echo "existing data directory requires credentials file: $CREDENTIALS" >&2; exit 1; }
