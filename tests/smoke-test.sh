@@ -93,10 +93,11 @@ PGPASSWORD="$POSTGRES_PASSWORD" chroot "$CUSTOM_PREFIX/rootfs" "$PG_BIN/psql" -h
 
 # Reinstall with a different password must keep the original credentials password.
 systemctl stop "$CUSTOM_SERVICE"
-CHROOT_PG_PASSWORD="$OTHER_PASSWORD" "$PACKAGE_DIR/install.sh" \
+reinstall_output="$(CHROOT_PG_PASSWORD="$OTHER_PASSWORD" "$PACKAGE_DIR/install.sh" \
   --prefix "$CUSTOM_PREFIX" --data-dir "$CUSTOM_DATA_DIR" --service-name "$CUSTOM_SERVICE" \
   --credentials-file "$CUSTOM_CREDENTIALS" --port "$CUSTOM_PORT" --listen-addresses 127.0.0.1 \
-  --password "$OTHER_PASSWORD" 2>&1 | grep -q 'ignored' || { echo 'reinstall did not warn about ignored password' >&2; exit 1; }
+  --password "$OTHER_PASSWORD" 2>&1)"
+grep -q 'ignored' <<<"$reinstall_output" || { echo 'reinstall did not warn about ignored password' >&2; exit 1; }
 systemctl is-active --quiet "$CUSTOM_SERVICE"
 source "$CUSTOM_CREDENTIALS"
 [[ "$POSTGRES_PASSWORD" == "$CUSTOM_PASSWORD" ]] || { echo 'reinstall changed the stored password' >&2; exit 1; }
