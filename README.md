@@ -20,16 +20,22 @@ sudo cat /etc/chroot-pg/credentials
 
 默认路径为 `/opt/chroot-pg`（rootfs）、`/var/lib/chroot-pg/data`（数据）和 `/etc/chroot-pg/credentials`（凭据）；数据目录不会随普通卸载或升级删除。
 
-默认监听 `0.0.0.0:5432`，远程认证使用 SCRAM 密码。安装生成随机 `postgres` 密码；生产使用前必须通过防火墙和 `pg_hba.conf` 限制来源地址。
+默认监听 `0.0.0.0:5432`，远程认证使用 SCRAM 密码。安装时生成随机 `postgres` 密码，或通过 `--password` / `CHROOT_PG_PASSWORD` 指定；生产使用前必须通过防火墙和 `pg_hba.conf` 限制来源地址。
 
-数据库集群位于数据目录下的 `data` 子目录，例如 `/var/lib/chroot-pg/data/data`。`install.sh` 在该集群的 `postgresql.conf` 与 `pg_hba.conf` 末尾维护一段 `# BEGIN chroot-pg managed settings` 到 `# END chroot-pg managed settings` 的区块，每次安装都会重写它。自定义配置请写在区块之外；`pg_hba.conf` 先匹配先生效，收紧来源地址时把自己的规则放在区块之前。
+密码来源（仅全新集群）：`--password` > `CHROOT_PG_PASSWORD` > 随机生成。已有数据目录时传入密码会被忽略并警告，密码以 credentials 文件为准。自动化场景优先使用环境变量，避免密码进入 shell 历史：
+
+```bash
+sudo CHROOT_PG_PASSWORD='your-secret-here' ./install.sh
+```
 
 可覆盖默认值：
 
 ```bash
 sudo ./install.sh --prefix /opt/chroot-pg --data-dir /var/lib/chroot-pg/data \
-  --port 5432 --listen-addresses '127.0.0.1'
+  --port 5432 --listen-addresses '127.0.0.1' --password 'your-secret-here'
 ```
+
+数据库集群位于数据目录下的 `data` 子目录，例如 `/var/lib/chroot-pg/data/data`。`install.sh` 在该集群的 `postgresql.conf` 与 `pg_hba.conf` 末尾维护一段 `# BEGIN chroot-pg managed settings` 到 `# END chroot-pg managed settings` 的区块，每次安装都会重写它。自定义配置请写在区块之外；`pg_hba.conf` 先匹配先生效，收紧来源地址时把自己的规则放在区块之前。
 
 `sudo ./uninstall.sh` 删除服务和 rootfs、保留数据；仅在确认不再需要数据库时使用 `sudo ./uninstall.sh --purge-data`。
 

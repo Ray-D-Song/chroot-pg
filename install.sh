@@ -8,6 +8,7 @@ SERVICE_NAME=chroot-pg
 RUN_USER=chroot-pg
 PORT=5432
 LISTEN_ADDRESSES='*'
+PASSWORD_CLI=''
 
 usage() {
   cat <<EOF
@@ -18,12 +19,50 @@ Usage: sudo ./install.sh [options]
   --listen-addresses VALUE  PostgreSQL listen_addresses (default: *)
   --service-name NAME       systemd service name (default: $SERVICE_NAME)
   --credentials-file PATH   Root-only credentials file (default: $CREDENTIALS)
+  --password VALUE          postgres password for a new cluster (or set CHROOT_PG_PASSWORD)
 EOF
+}
+
+validate_password() {
+  local pw="$1"
+  [[ -n "$pw" ]] || { echo 'password must not be empty' >&2; exit 2; }
+  (( ${#pw} >= 8 )) || { echo 'password must be at least 8 characters' >&2; exit 2; }
+  [[ "$pw" != *$'\n'* && "$pw" != *$'\0'* ]] || { echo 'password must not contain newline or null bytes' >&2; exit 2; }
+  [[ ! "$pw" =~ [[:cntrl:]] ]] || { echo 'password must not contain control characters' >&2; exit 2; }
+}
+
+password_was_provided() {
+  [[ -n "$PASSWORD_CLI" || -n "${CHROOT_PG_PASSWORD:-}" ]]
+}
+
+warn_if_password_ignored() {
+  if password_was_provided; then
+    echo 'Warning: existing data directory detected; --password and CHROOT_PG_PASSWORD were ignored.' >&2
+  fi
+}
+
+resolve_password_for_new_install() {
+  if [[ -n "$PASSWORD_CLI" ]]; then
+    password="$PASSWORD_CLI"
+    echo "Using password from --password. It will be stored in $CREDENTIALS (root only)."
+  elif [[ -n "${CHROOT_PG_PASSWORD:-}" ]]; then
+    password="$CHROOT_PG_PASSWORD"
+    echo "Using password from CHROOT_PG_PASSWORD. It will be stored in $CREDENTIALS (root only)."
+  else
+    password="$(openssl rand -base64 36 | tr -d '\n')"
+    echo "Generated PostgreSQL password. It is stored in $CREDENTIALS (root only)."
+  fi
+  validate_password "$password"
+}
+
+read_credentials_password() {
+  password="$(awk -F= '$1 == "POSTGRES_PASSWORD" { print substr($0, index($0, "=") + 1) }' "$CREDENTIALS")"
+  [[ -n "$password" ]] || { echo "credentials file has no POSTGRES_PASSWORD: $CREDENTIALS" >&2; exit 1; }
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --prefix|--data-dir|--port|--listen-addresses|--service-name|--credentials-file)
+    --prefix|--data-dir|--port|--listen-addresses|--service-name|--credentials-file|--password)
       key="$1"; shift; [[ $# -gt 0 ]] || { echo "missing value for $key" >&2; exit 2; }
       case "$key" in
         --prefix) PREFIX="$1" ;;
@@ -32,6 +71,7 @@ while [[ $# -gt 0 ]]; do
         --listen-addresses) LISTEN_ADDRESSES="$1" ;;
         --service-name) SERVICE_NAME="$1" ;;
         --credentials-file) CREDENTIALS="$1" ;;
+        --password) PASSWORD_CLI="$1" ;;
       esac
       shift ;;
     --help|-h) usage; exit 0 ;;
@@ -128,7 +168,7 @@ discard_stray_conf() {
 }
 
 if [[ ! -f "$PGDATA_HOST/PG_VERSION" ]]; then
-  password="$(openssl rand -base64 36 | tr -d '\n')"
+  resolve_password_for_new_install
   umask 077
   cat > "$CREDENTIALS" <<EOF
 POSTGRES_USER=postgres
@@ -161,9 +201,10 @@ EOF
   rm -f "$password_file"
   cleanup_mounts
   trap - EXIT
-  echo "Generated PostgreSQL password. It is stored in $CREDENTIALS (root only)."
 else
   [[ -f "$CREDENTIALS" ]] || { echo "existing data directory requires credentials file: $CREDENTIALS" >&2; exit 1; }
+  read_credentials_password
+  warn_if_password_ignored
 fi
 
 apply_managed_settings
