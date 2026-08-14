@@ -27,7 +27,8 @@ validate_password() {
   local pw="$1"
   [[ -n "$pw" ]] || { echo 'password must not be empty' >&2; exit 2; }
   (( ${#pw} >= 8 )) || { echo 'password must be at least 8 characters' >&2; exit 2; }
-  [[ "$pw" != *$'\n'* && "$pw" != *$'\0'* ]] || { echo 'password must not contain newline or null bytes' >&2; exit 2; }
+  [[ "${pw//$'\n'}" == "$pw" ]] || { echo 'password must not contain newline' >&2; exit 2; }
+  [[ "${pw//$'\0'}" == "$pw" ]] || { echo 'password must not contain null bytes' >&2; exit 2; }
   [[ ! "$pw" =~ [[:cntrl:]] ]] || { echo 'password must not contain control characters' >&2; exit 2; }
 }
 
