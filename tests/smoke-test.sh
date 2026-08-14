@@ -34,13 +34,14 @@ systemctl is-active --quiet "$SERVICE"
 
 source "$CREDENTIALS"
 wait_for_postgres() {
+  local prefix="${1:-$PREFIX}" port="${2:-$PORT}" password="${3:-$POSTGRES_PASSWORD}"
   for _ in $(seq 1 30); do
-    if PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/pg_isready" -h 127.0.0.1 -p "$PORT" -U postgres; then
+    if PGPASSWORD="$password" chroot "$prefix/rootfs" "$PG_BIN/pg_isready" -h 127.0.0.1 -p "$port" -U postgres; then
       return 0
     fi
     sleep 1
   done
-  echo "PostgreSQL did not become ready on port $PORT" >&2
+  echo "PostgreSQL did not become ready on port $port" >&2
   return 1
 }
 
@@ -87,6 +88,7 @@ CHROOT_PG_PASSWORD="$CUSTOM_PASSWORD" "$PACKAGE_DIR/install.sh" \
 systemctl is-active --quiet "$CUSTOM_SERVICE"
 source "$CUSTOM_CREDENTIALS"
 [[ "$POSTGRES_PASSWORD" == "$CUSTOM_PASSWORD" ]] || { echo 'custom password was not stored in credentials' >&2; exit 1; }
+wait_for_postgres "$CUSTOM_PREFIX" "$CUSTOM_PORT" "$POSTGRES_PASSWORD"
 PGPASSWORD="$POSTGRES_PASSWORD" chroot "$CUSTOM_PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.0.1 -p "$CUSTOM_PORT" -U postgres -d postgres -tAc 'select 1' | grep -Fx 1
 
 # Reinstall with a different password must keep the original credentials password.
@@ -98,6 +100,7 @@ CHROOT_PG_PASSWORD="$OTHER_PASSWORD" "$PACKAGE_DIR/install.sh" \
 systemctl is-active --quiet "$CUSTOM_SERVICE"
 source "$CUSTOM_CREDENTIALS"
 [[ "$POSTGRES_PASSWORD" == "$CUSTOM_PASSWORD" ]] || { echo 'reinstall changed the stored password' >&2; exit 1; }
+wait_for_postgres "$CUSTOM_PREFIX" "$CUSTOM_PORT" "$POSTGRES_PASSWORD"
 PGPASSWORD="$POSTGRES_PASSWORD" chroot "$CUSTOM_PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.0.1 -p "$CUSTOM_PORT" -U postgres -d postgres -tAc 'select 1' | grep -Fx 1
 
 custom_cleanup
