@@ -171,6 +171,10 @@ discard_stray_conf() {
 
 if [[ ! -f "$PGDATA_HOST/PG_VERSION" ]]; then
   resolve_password_for_new_install
+  if ! chroot "$PREFIX/rootfs" /usr/bin/locale -a 2>/dev/null | grep -Eiq '^C\.(UTF-8|utf8)$'; then
+    echo "rootfs is missing the required C.UTF-8 locale; rebuild the chroot-pg package" >&2
+    exit 1
+  fi
   umask 077
   cat > "$CREDENTIALS" <<EOF
 POSTGRES_USER=postgres
@@ -197,9 +201,10 @@ EOF
   trap rollback_initialization EXIT
   printf '%s\n' "$password" > "$password_file"
   chown "$RUN_UID:$RUN_GID" "$password_file"; chmod 0600 "$password_file"
-  chroot --userspec="$RUN_UID:$RUN_GID" "$PREFIX/rootfs" /usr/lib/postgresql/17/bin/initdb \
+  chroot --userspec="$RUN_UID:$RUN_GID" "$PREFIX/rootfs" /usr/bin/env \
+    LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/lib/postgresql/17/bin/initdb \
     -D /var/lib/postgresql/data --username=postgres --pwfile=/var/lib/postgresql/.init-password \
-    --auth-host=scram-sha-256 --auth-local=peer --no-instructions
+    --auth-host=scram-sha-256 --auth-local=peer --locale=C.UTF-8 --no-instructions
   rm -f "$password_file"
   cleanup_mounts
   trap - EXIT

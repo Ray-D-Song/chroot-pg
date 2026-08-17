@@ -27,7 +27,9 @@ trap cleanup EXIT
 tar -xzf "$BUNDLE" -C "$WORK_DIR"
 PACKAGE_DIR="$(find "$WORK_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 [[ -n "$PACKAGE_DIR" ]] || { echo 'bundle root directory missing' >&2; exit 1; }
-"$PACKAGE_DIR/install.sh" --prefix "$PREFIX" --data-dir "$DATA_DIR" --service-name "$SERVICE" --credentials-file "$CREDENTIALS" --port "$PORT" --listen-addresses 127.0.0.1
+env LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 "$PACKAGE_DIR/install.sh" \
+  --prefix "$PREFIX" --data-dir "$DATA_DIR" --service-name "$SERVICE" \
+  --credentials-file "$CREDENTIALS" --port "$PORT" --listen-addresses 127.0.0.1
 systemctl is-active --quiet "$SERVICE"
 [[ "$(grep -c '^# BEGIN chroot-pg managed settings$' "$DATA_DIR/data/pg_hba.conf")" == 1 ]] || { echo 'managed pg_hba block is missing or duplicated' >&2; exit 1; }
 [[ ! -e "$DATA_DIR/pg_hba.conf" && ! -e "$DATA_DIR/postgresql.conf" ]] || { echo 'configuration was written outside PGDATA' >&2; exit 1; }
