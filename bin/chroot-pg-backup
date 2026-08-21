@@ -116,7 +116,10 @@ case "$ACTION" in
     mkdir -p "$output"; chown -R "$run_uid:$run_gid" "$output"
     backup_args=(/usr/lib/postgresql/17/bin/pg_basebackup -h "$HOST" -p "$PORT" -U "$PG_USER" \
       -D "$(map_path "$output")" -Fp -X stream -c fast -P --manifest-checksums=SHA256)
-    for mapping in "${TABLESPACE_MAPPINGS[@]}"; do backup_args+=(--tablespace-mapping="$(map_tablespace_mapping "$mapping")"); done
+    for mapping in "${TABLESPACE_MAPPINGS[@]:-}"; do
+      [[ -n "$mapping" ]] || continue
+      backup_args+=(--tablespace-mapping="$(map_tablespace_mapping "$mapping")")
+    done
     run_pg "${backup_args[@]}" >/dev/null
     json_result "$output" "$output/backup_manifest" ;;
   backup-incremental)
@@ -126,7 +129,10 @@ case "$ACTION" in
     backup_args=(/usr/lib/postgresql/17/bin/pg_basebackup -h "$HOST" -p "$PORT" -U "$PG_USER" \
       -D "$(map_path "$output")" -Fp -X stream -c fast -P \
       --incremental="$(map_path "$BASE_MANIFEST")" --manifest-checksums=SHA256)
-    for mapping in "${TABLESPACE_MAPPINGS[@]}"; do backup_args+=(--tablespace-mapping="$(map_tablespace_mapping "$mapping")"); done
+    for mapping in "${TABLESPACE_MAPPINGS[@]:-}"; do
+      [[ -n "$mapping" ]] || continue
+      backup_args+=(--tablespace-mapping="$(map_tablespace_mapping "$mapping")")
+    done
     run_pg "${backup_args[@]}" >/dev/null
     json_result "$output" "$output/backup_manifest" ;;
   verify)
@@ -139,7 +145,10 @@ case "$ACTION" in
     (( ${#COMBINE_INPUTS[@]} > 0 )) || die 'at least one input is required'
     mkdir -p "$(dirname "$OUTPUT")"; chown "$run_uid:$run_gid" "$(dirname "$OUTPUT")"
     args=(/usr/lib/postgresql/17/bin/pg_combinebackup -o "$(map_path "$OUTPUT")")
-    for mapping in "${TABLESPACE_MAPPINGS[@]}"; do args+=(--tablespace-mapping="$(map_tablespace_mapping "$mapping")"); done
+    for mapping in "${TABLESPACE_MAPPINGS[@]:-}"; do
+      [[ -n "$mapping" ]] || continue
+      args+=(--tablespace-mapping="$(map_tablespace_mapping "$mapping")")
+    done
     for input in "${COMBINE_INPUTS[@]}"; do args+=("$(map_path "$input")"); done
     run_pg "${args[@]}"
     json_result "$OUTPUT" "$OUTPUT/backup_manifest" ;;
