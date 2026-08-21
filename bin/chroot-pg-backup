@@ -99,13 +99,16 @@ map_tablespace_mapping() {
 }
 
 prepare_tablespace_destinations() {
-  local mapping new
+  local mapping new parent
   for mapping in "${TABLESPACE_MAPPINGS[@]:-}"; do
     [[ -n "$mapping" ]] || continue
     [[ "$mapping" == *=* ]] || die "invalid tablespace mapping: $mapping"
     new="${mapping#*=}"
     map_path "$new" >/dev/null
     mkdir -p "$new"
+    parent="${new%/*}"
+    chown "$run_uid:$run_gid" "$parent"
+    chmod 0750 "$parent"
     chown -R "$run_uid:$run_gid" "$new"
   done
 }
