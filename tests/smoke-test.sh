@@ -56,12 +56,31 @@ pg_exec() {
     -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -v ON_ERROR_STOP=1 "$@"
 }
 
+pg_query() {
+  pg_exec -tAc "$1" | sed -e 's/^ *//' -e 's/ *$//' | tr -d '\r'
+}
+
 wait_for_wal_archive() {
   for _ in $(seq 1 60); do
     compgen -G "$DATA_DIR/wal-archive/[0-9A-Fa-f]*" >/dev/null && return 0
     sleep 1
   done
   echo 'WAL archive file was not created in time' >&2
+  return 1
+}
+
+switch_wal_and_wait_for_archive() {
+  local before current
+  before="$(pg_query 'select archived_count from pg_stat_archiver')"
+  pg_exec -tAc 'select pg_switch_wal()' >/dev/null
+  for _ in $(seq 1 60); do
+    current="$(pg_query 'select archived_count from pg_stat_archiver')"
+    if [[ "$current" =~ ^[0-9]+$ && "$before" =~ ^[0-9]+$ ]] && (( current > before )); then
+      return 0
+    fi
+    sleep 1
+  done
+  echo 'WAL archiver did not complete after pg_switch_wal' >&2
   return 1
 }
 
@@ -185,11 +204,10 @@ fi
   verify >"$WORK_DIR/combined-verify-result.json"
 
 pg_exec -c "insert into ci_backup values (3, 'pitr-before')"
-PITR_TARGET="$(date -u --iso-8601=seconds)"
+PITR_TARGET="$(pg_query 'select clock_timestamp()::text')"
 sleep 2
 pg_exec -c "insert into ci_backup values (4, 'pitr-after')"
-pg_exec -tAc 'select pg_switch_wal()' >/dev/null
-wait_for_wal_archive
+switch_wal_and_wait_for_archive
 sync_wal_archive
 
 systemctl stop "$SERVICE"
@@ -199,6 +217,7 @@ chown -R chroot-pg:chroot-pg "$DATA_DIR/data"
 cat >"$DATA_DIR/data/postgresql.auto.conf" <<EOF
 restore_command = 'cp /var/lib/postgresql/wal-archive/%f %p'
 recovery_target_time = '$PITR_TARGET'
+recovery_target_inclusive = true
 recovery_target_action = 'promote'
 EOF
 touch "$DATA_DIR/data/recovery.signal"
@@ -207,7 +226,8 @@ chmod 0600 "$DATA_DIR/data/postgresql.auto.conf" "$DATA_DIR/data/recovery.signal
 systemctl start "$SERVICE"
 wait_for_postgres
 pg_exec -tAc 'select pg_is_in_recovery()' | grep -Fx f
-pg_exec -tAc "select string_agg(note, ',' order by id) from ci_backup" | tr -d '[:space:]' | grep -Fx 'baseline,incremental,pitr-before'
+PITR_ROWS="$(pg_query "select string_agg(note, ',' order by id) from ci_backup")"
+[[ "$PITR_ROWS" == 'baseline,incremental,pitr-before' ]] || { echo "unexpected PITR rows: $PITR_ROWS" >&2; exit 1; }
 [[ ! -e "$DATA_DIR/data/recovery.signal" ]] || { echo 'recovery.signal was not cleaned after promotion' >&2; exit 1; }
 
 systemctl restart "$SERVICE"
