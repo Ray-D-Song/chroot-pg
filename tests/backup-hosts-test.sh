@@ -4,21 +4,19 @@ set -euo pipefail
 BUNDLE="${1:?usage: backup-hosts-test.sh <bundle.tar.gz>}"
 WORK_DIR="$(mktemp -d /tmp/chroot-pg-hosts-test.XXXXXX)"
 PREFIX="/opt/chroot-pg-hosts-test-$$"
-DATA_DIR="/var/lib/chroot-pg-hosts-test-$$"
-BACKUP_DIR="/var/backups/chroot-pg-hosts-test-$$"
-CREDENTIALS="/etc/chroot-pg-hosts-test-$$/credentials"
 TEST_HOST='pg-headless-test'
 TEST_IP='203.0.113.1'
 PACKAGE_DIR=''
 ROOTFS=''
 HOSTS_MOUNT=''
+TMP_HOSTS=''
 
 cleanup() {
-  if [[ -n "$HOSTS_MOUNT" && -n "$ROOTFS" ]]; then
+  if [[ -n "$HOSTS_MOUNT" ]]; then
     umount "$HOSTS_MOUNT" 2>/dev/null || true
   fi
-  rm -f "$CREDENTIALS"
-  rm -rf "$(dirname "$CREDENTIALS")" "$PREFIX" "$DATA_DIR" "$BACKUP_DIR" "$WORK_DIR"
+  [[ -n "$TMP_HOSTS" ]] && rm -f "$TMP_HOSTS"
+  rm -rf "$PREFIX" "$WORK_DIR"
 }
 trap cleanup EXIT
 
@@ -47,22 +45,20 @@ if ! awk -F: -v uid="$run_uid" '$3 == uid { found=1 } END { exit !found }' "$ROO
     "$run_uid" "$run_gid" >> "$ROOTFS/etc/passwd"
 fi
 
-tmp_hosts="$(mktemp)"
-cp /etc/hosts "$tmp_hosts"
-printf '%s %s\n' "$TEST_IP" "$TEST_HOST" >> "$tmp_hosts"
+TMP_HOSTS="$(mktemp)"
+cp /etc/hosts "$TMP_HOSTS"
+printf '%s %s\n' "$TEST_IP" "$TEST_HOST" >> "$TMP_HOSTS"
 
 HOSTS_MOUNT="$ROOTFS/etc/hosts"
-mount --bind "$tmp_hosts" "$HOSTS_MOUNT"
+mount --bind "$TMP_HOSTS" "$HOSTS_MOUNT"
 
-result="$(chroot --userspec="$run_uid:$run_gid" "$ROOTFS" /usr/bin/getent hosts "$TEST_HOST")"
-[[ "$result" == *"$TEST_IP"* ]] || {
-  echo "expected $TEST_IP in getent output, got: $result" >&2
+hosts_content="$(chroot --userspec="$run_uid:$run_gid" "$ROOTFS" cat /etc/hosts)"
+[[ "$hosts_content" == *"$TEST_IP"* && "$hosts_content" == *"$TEST_HOST"* ]] || {
+  echo "expected $TEST_IP and $TEST_HOST in chroot /etc/hosts" >&2
   exit 1
 }
 
-if "$PREFIX/bin/chroot-pg-backup" --help 2>&1 | grep -q -- '--remote'; then
-  :
-else
+if ! "$PREFIX/bin/chroot-pg-backup" --help 2>&1 | grep -q -- '--remote'; then
   echo 'chroot-pg-backup help does not mention --remote' >&2
   exit 1
 fi
