@@ -95,6 +95,7 @@ map_tablespace_mapping() {
   local mapping="$1" old new
   [[ "$mapping" == *=* ]] || die "invalid tablespace mapping: $mapping"
   old="${mapping%%=*}"; new="${mapping#*=}"
+  if [[ "$old" == "$BACKUP_DIR"/* ]]; then old="$(map_path "$old")"; fi
   printf '%s=%s' "$old" "$(map_path "$new")"
 }
 
