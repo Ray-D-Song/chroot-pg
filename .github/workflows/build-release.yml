@@ -74,6 +74,8 @@ jobs:
         run: (cd dist && sha256sum --check SHA256SUMS)
       - name: Run real service smoke test
         run: sudo -E bash tests/smoke-test.sh "$(find dist -name 'chroot-pg-*-linux-amd64.tar.gz' -print -quit)" "$GITHUB_RUN_ID"
+      - name: Verify remote hosts bind-mount
+        run: sudo bash tests/backup-hosts-test.sh "$(find dist -name 'chroot-pg-*-linux-amd64.tar.gz' -print -quit)"
 
   verify-ubuntu24:
     name: Verify on Ubuntu 24.04
@@ -96,6 +98,8 @@ jobs:
         run: (cd dist && sha256sum --check SHA256SUMS)
       - name: Run real service smoke test
         run: sudo -E bash tests/smoke-test.sh "$(find dist -name 'chroot-pg-*-linux-amd64.tar.gz' -print -quit)" "$GITHUB_RUN_ID"
+      - name: Verify remote hosts bind-mount
+        run: sudo bash tests/backup-hosts-test.sh "$(find dist -name 'chroot-pg-*-linux-amd64.tar.gz' -print -quit)"
 
   release:
     name: Create GitHub Release
