@@ -168,6 +168,8 @@ if "$PREFIX/bin/chroot-pg-backup" "${backup_args[@]}" --target "$FULL_DIR" \
   exit 1
 fi
 mv "$WORK_DIR/full-backup-manifest" "$FULL_DIR/backup_manifest"
+chown chroot-pg:chroot-pg "$FULL_DIR/backup_manifest"
+chmod 0600 "$FULL_DIR/backup_manifest"
 
 install -d -o chroot-pg -g chroot-pg -m 0750 "$BROKEN_WAL_DIR"
 if "$PREFIX/bin/chroot-pg-backup" "${backup_args[@]}" --target "$FULL_DIR" \
