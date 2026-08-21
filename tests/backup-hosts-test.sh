@@ -47,6 +47,7 @@ fi
 
 TMP_HOSTS="$(mktemp)"
 cp /etc/hosts "$TMP_HOSTS"
+chmod 0644 "$TMP_HOSTS"
 printf '%s %s\n' "$TEST_IP" "$TEST_HOST" >> "$TMP_HOSTS"
 
 HOSTS_MOUNT="$ROOTFS/etc/hosts"
