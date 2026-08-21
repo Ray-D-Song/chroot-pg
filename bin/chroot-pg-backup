@@ -98,6 +98,18 @@ map_tablespace_mapping() {
   printf '%s=%s' "$old" "$(map_path "$new")"
 }
 
+prepare_tablespace_destinations() {
+  local mapping new
+  for mapping in "${TABLESPACE_MAPPINGS[@]:-}"; do
+    [[ -n "$mapping" ]] || continue
+    [[ "$mapping" == *=* ]] || die "invalid tablespace mapping: $mapping"
+    new="${mapping#*=}"
+    map_path "$new" >/dev/null
+    mkdir -p "$new"
+    chown -R "$run_uid:$run_gid" "$new"
+  done
+}
+
 run_pg() {
   chroot --userspec="$run_uid:$run_gid" "$ROOTFS" /usr/bin/env \
     LANG=C.UTF-8 LC_ALL=C.UTF-8 PGPASSFILE=/run/chroot-pg-backup.pgpass "$@"
@@ -114,6 +126,7 @@ case "$ACTION" in
   backup-full)
     output="${OUTPUT:-$set_root/full}"
     mkdir -p "$output"; chown -R "$run_uid:$run_gid" "$output"
+    prepare_tablespace_destinations
     backup_args=(/usr/lib/postgresql/17/bin/pg_basebackup -h "$HOST" -p "$PORT" -U "$PG_USER" \
       -D "$(map_path "$output")" -Fp -X stream -c fast -P --manifest-checksums=SHA256)
     for mapping in "${TABLESPACE_MAPPINGS[@]:-}"; do
@@ -126,6 +139,7 @@ case "$ACTION" in
     [[ -n "$BASE_MANIFEST" ]] || die 'base-manifest is required'
     output="${OUTPUT:-$set_root/incremental/$(date +%s)}"
     mkdir -p "$output"; chown -R "$run_uid:$run_gid" "$output"
+    prepare_tablespace_destinations
     backup_args=(/usr/lib/postgresql/17/bin/pg_basebackup -h "$HOST" -p "$PORT" -U "$PG_USER" \
       -D "$(map_path "$output")" -Fp -X stream -c fast -P \
       --incremental="$(map_path "$BASE_MANIFEST")" --manifest-checksums=SHA256)
@@ -144,6 +158,7 @@ case "$ACTION" in
     [[ -n "$OUTPUT" ]] || die 'output is required'
     (( ${#COMBINE_INPUTS[@]} > 0 )) || die 'at least one input is required'
     mkdir -p "$(dirname "$OUTPUT")"; chown "$run_uid:$run_gid" "$(dirname "$OUTPUT")"
+    prepare_tablespace_destinations
     args=(/usr/lib/postgresql/17/bin/pg_combinebackup -o "$(map_path "$OUTPUT")")
     for mapping in "${TABLESPACE_MAPPINGS[@]:-}"; do
       [[ -n "$mapping" ]] || continue
