@@ -34,14 +34,6 @@ fi
 run_uid="$(id -u chroot-pg)"
 run_gid="$(id -g chroot-pg)"
 
-mkdir -p "$DATA_DIR/data" "$BACKUP_DIR" "$(dirname "$CREDENTIALS")"
-cat > "$CREDENTIALS" <<EOF
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=test-pass-8chars
-POSTGRES_PORT=5432
-EOF
-chmod 0600 "$CREDENTIALS"
-
 cp -a "$PACKAGE_DIR/rootfs" "$PREFIX/rootfs"
 ROOTFS="$PREFIX/rootfs"
 install -D -m 0755 "$PACKAGE_DIR/bin/chroot-pg-backup" "$PREFIX/bin/chroot-pg-backup"
