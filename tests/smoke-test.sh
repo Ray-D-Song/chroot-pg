@@ -31,6 +31,8 @@ env LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 "$PACKAGE_DIR/install.sh" \
   --prefix "$PREFIX" --data-dir "$DATA_DIR" --service-name "$SERVICE" \
   --credentials-file "$CREDENTIALS" --port "$PORT" --listen-addresses 127.0.0.1
 systemctl is-active --quiet "$SERVICE"
+[[ -x "$PREFIX/bin/chroot-pg-backup" ]] || { echo 'backup wrapper missing from installation' >&2; exit 1; }
+"$PREFIX/bin/chroot-pg-backup" --help >/dev/null
 [[ "$(grep -c '^# BEGIN chroot-pg managed settings$' "$DATA_DIR/data/pg_hba.conf")" == 1 ]] || { echo 'managed pg_hba block is missing or duplicated' >&2; exit 1; }
 [[ ! -e "$DATA_DIR/pg_hba.conf" && ! -e "$DATA_DIR/postgresql.conf" ]] || { echo 'configuration was written outside PGDATA' >&2; exit 1; }
 
@@ -52,9 +54,20 @@ wait_for_postgres
 # somewhere: a loopback-only smoke test would otherwise pass without them.
 PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -tAc \
   "select count(*) from pg_hba_file_rules where type = 'host' and auth_method = 'scram-sha-256' and netmask in ('0.0.0.0', '::') and error is null" \
-  | grep -Fx 2
+  | grep -Fx 4
+PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -tAc \
+  "select current_setting('wal_level') || '|' || current_setting('archive_mode') || '|' || current_setting('summarize_wal')" \
+  | grep -Fx 'replica|on|on'
+PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -tAc \
+  "select current_setting('archive_command') <> ''" | grep -Fx t
 PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -v ON_ERROR_STOP=1 \
   -c 'create table ci_smoke(id integer primary key, note text)' -c "insert into ci_smoke values (1, 'ok')" -c 'select * from ci_smoke'
+PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -tAc 'select pg_switch_wal()'
+for _ in $(seq 1 20); do
+  compgen -G "$DATA_DIR/wal-archive/[0-9A-Fa-f]*" >/dev/null && break
+  sleep 1
+done
+compgen -G "$DATA_DIR/wal-archive/[0-9A-Fa-f]*" >/dev/null || { echo 'WAL archive file was not created' >&2; exit 1; }
 systemctl restart "$SERVICE"
 wait_for_postgres
 PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -tAc 'select note from ci_smoke where id = 1' | grep -Fx ok
