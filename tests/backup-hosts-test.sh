@@ -34,6 +34,7 @@ fi
 run_uid="$(id -u chroot-pg)"
 run_gid="$(id -g chroot-pg)"
 
+mkdir -p "$PREFIX"
 cp -a "$PACKAGE_DIR/rootfs" "$PREFIX/rootfs"
 ROOTFS="$PREFIX/rootfs"
 install -D -m 0755 "$PACKAGE_DIR/bin/chroot-pg-backup" "$PREFIX/bin/chroot-pg-backup"
