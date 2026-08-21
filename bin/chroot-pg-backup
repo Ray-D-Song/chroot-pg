@@ -4,20 +4,22 @@ set -euo pipefail
 # Privileged adapter for PostgreSQL 17's native physical backup tools.
 ROOTFS=''; DATA_DIR=''; CREDENTIALS=''; BACKUP_DIR=''
 HOST=127.0.0.1; PORT=5432; PG_USER=postgres; SET_ID=''
-OUTPUT=''; BASE_MANIFEST=''; TARGET=''; WAL_DIR=''; ACTION=''
+OUTPUT=''; BASE_MANIFEST=''; TARGET=''; WAL_DIR=''; SLOT=''; ENDPOS=''
+SSL_MODE=disable; SSL_CA_FILE=''; REMOTE=0; ACTION=''
 COMBINE_INPUTS=(); TABLESPACE_MAPPINGS=()
 
 usage() {
   cat >&2 <<'EOF'
-Usage: chroot-pg-backup --rootfs PATH --data-dir PATH --credentials-file PATH \
-  --backup-dir PATH --set-id ID [options] backup-full|backup-incremental|verify|combine
+Usage: chroot-pg-backup --rootfs PATH [--data-dir PATH] --credentials-file PATH \
+  --backup-dir PATH --set-id ID [options] \
+  backup-full|backup-incremental|verify|combine|create-slot|drop-slot|receive-wal
 EOF
 }
 die() { echo "chroot-pg-backup: $*" >&2; exit 2; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --rootfs|--data-dir|--credentials-file|--backup-dir|--host|--port|--user|--set-id|--output|--base-manifest|--target|--wal-dir|--input|--tablespace-mapping)
+    --rootfs|--data-dir|--credentials-file|--backup-dir|--host|--port|--user|--set-id|--output|--base-manifest|--target|--wal-dir|--slot|--endpos|--ssl-mode|--ssl-ca-file|--input|--tablespace-mapping)
       [[ $# -ge 2 ]] || die "missing value for $1"
       key="$1"; value="$2"; shift 2
       case "$key" in
@@ -33,11 +35,16 @@ while [[ $# -gt 0 ]]; do
         --base-manifest) BASE_MANIFEST="$value" ;;
         --target) TARGET="$value" ;;
         --wal-dir) WAL_DIR="$value" ;;
+        --slot) SLOT="$value" ;;
+        --endpos) ENDPOS="$value" ;;
+        --ssl-mode) SSL_MODE="$value" ;;
+        --ssl-ca-file) SSL_CA_FILE="$value" ;;
         --input) COMBINE_INPUTS+=("$value") ;;
         --tablespace-mapping) TABLESPACE_MAPPINGS+=("$value") ;;
       esac
       ;;
-    backup-full|backup-incremental|verify|combine)
+    --remote) REMOTE=1; shift ;;
+    backup-full|backup-incremental|verify|combine|create-slot|drop-slot|receive-wal)
       [[ -z "$ACTION" ]] || die "only one action is allowed"
       ACTION="$1"; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -47,7 +54,9 @@ done
 
 [[ $EUID -eq 0 ]] || die 'must run as root'
 [[ -n "$ROOTFS" && -d "$ROOTFS" ]] || die 'rootfs is required'
-[[ -n "$DATA_DIR" && -d "$DATA_DIR" ]] || die 'data-dir is required'
+if [[ "$REMOTE" == 0 ]]; then
+  [[ -n "$DATA_DIR" && -d "$DATA_DIR" ]] || die 'data-dir is required for local mode'
+fi
 [[ -n "$CREDENTIALS" && -r "$CREDENTIALS" ]] || die 'credentials-file is required'
 [[ -n "$BACKUP_DIR" && "$BACKUP_DIR" == /* && "$BACKUP_DIR" != / ]] || die 'backup-dir must be absolute'
 [[ -n "$SET_ID" && "$SET_ID" =~ ^[A-Za-z0-9._-]+$ ]] || die 'invalid set-id'
@@ -59,6 +68,12 @@ password="$(awk -F= '$1 == "POSTGRES_PASSWORD" { print substr($0, index($0, "=")
 run_uid="$(id -u chroot-pg 2>/dev/null || true)"
 run_gid="$(id -g chroot-pg 2>/dev/null || true)"
 [[ -n "$run_uid" && -n "$run_gid" ]] || die 'host user chroot-pg does not exist'
+[[ "$SLOT" == '' || "$SLOT" =~ ^[A-Za-z0-9._-]+$ ]] || die 'invalid replication slot'
+[[ "$SSL_MODE" == disable || "$SSL_MODE" == require || "$SSL_MODE" == verify-ca || "$SSL_MODE" == verify-full || "$SSL_MODE" == verify-identity ]] || die 'invalid ssl mode'
+if [[ "$SSL_MODE" == verify-identity ]]; then SSL_MODE=verify-full; fi
+if [[ "$SSL_MODE" == verify-ca || "$SSL_MODE" == verify-full ]]; then
+  [[ -n "$SSL_CA_FILE" && -r "$SSL_CA_FILE" ]] || die 'ssl-ca-file is required for TLS verification'
+fi
 
 mkdir -p "$BACKUP_DIR/sets/$SET_ID" "$BACKUP_DIR/wal"
 chown "$run_uid:$run_gid" "$BACKUP_DIR" "$BACKUP_DIR/sets" "$BACKUP_DIR/sets/$SET_ID" "$BACKUP_DIR/wal"
@@ -66,24 +81,30 @@ chmod 0750 "$BACKUP_DIR" "$BACKUP_DIR/sets" "$BACKUP_DIR/sets/$SET_ID" "$BACKUP_
 
 MOUNT_ROOT="$ROOTFS/mnt/chroot-pg-backup"
 PASS_FILE="$ROOTFS/run/chroot-pg-backup.pgpass"
+CA_FILE="$ROOTFS/run/chroot-pg-backup-ca.pem"
 DATA_MOUNT="$ROOTFS/var/lib/postgresql"
 mkdir -p "$MOUNT_ROOT" "$ROOTFS/run"
-mkdir -p "$DATA_MOUNT"
+if [[ "$REMOTE" == 0 ]]; then mkdir -p "$DATA_MOUNT"; fi
 mount --bind "$BACKUP_DIR" "$MOUNT_ROOT"
 mounted_backup=1
 cleanup() {
-  rm -f "$PASS_FILE"
+  rm -f "$PASS_FILE" "$CA_FILE"
   if [[ "${mounted_backup:-0}" == 1 ]]; then umount "$MOUNT_ROOT" 2>/dev/null || true; fi
   if [[ "${mounted_data:-0}" == 1 ]]; then umount "$DATA_MOUNT" 2>/dev/null || true; fi
 }
 trap cleanup EXIT
-mount --bind "$DATA_DIR" "$DATA_MOUNT"
-mounted_data=1
+if [[ "$REMOTE" == 0 ]]; then
+  mount --bind "$DATA_DIR" "$DATA_MOUNT"
+  mounted_data=1
+fi
 
 escaped_password="${password//\\/\\\\}"
 escaped_password="${escaped_password//:/\\:}"
 printf '*:*:*:%s:%s\n' "$PG_USER" "$escaped_password" > "$PASS_FILE"
 chown "$run_uid:$run_gid" "$PASS_FILE"; chmod 0600 "$PASS_FILE"
+if [[ "$SSL_MODE" == verify-ca || "$SSL_MODE" == verify-full ]]; then
+  install -o "$run_uid" -g "$run_gid" -m 0600 "$SSL_CA_FILE" "$CA_FILE"
+fi
 
 map_path() {
   local value="$1"
@@ -117,8 +138,9 @@ prepare_tablespace_destinations() {
 }
 
 run_pg() {
-  chroot --userspec="$run_uid:$run_gid" "$ROOTFS" /usr/bin/env \
-    LANG=C.UTF-8 LC_ALL=C.UTF-8 PGPASSFILE=/run/chroot-pg-backup.pgpass "$@"
+  local -a env_args=(LANG=C.UTF-8 LC_ALL=C.UTF-8 PGPASSFILE=/run/chroot-pg-backup.pgpass PGSSLMODE="$SSL_MODE")
+  if [[ "$SSL_MODE" == verify-ca || "$SSL_MODE" == verify-full ]]; then env_args+=(PGSSLROOTCERT=/run/chroot-pg-backup-ca.pem); fi
+  chroot --userspec="$run_uid:$run_gid" "$ROOTFS" /usr/bin/env "${env_args[@]}" "$@"
 }
 
 json_result() {
@@ -129,12 +151,40 @@ json_result() {
 
 set_root="$BACKUP_DIR/sets/$SET_ID"
 case "$ACTION" in
+  create-slot|drop-slot)
+    [[ "$REMOTE" == 1 ]] || die "$ACTION is only available in remote mode"
+    [[ -n "$SLOT" ]] || die 'slot is required'
+    slot_dir="$ROOTFS/run/chroot-pg-slot-$SET_ID"
+    mkdir -p "$slot_dir"; chown "$run_uid:$run_gid" "$slot_dir"
+    slot_args=(/usr/lib/postgresql/17/bin/pg_receivewal -w -D "/run/chroot-pg-slot-$SET_ID" -h "$HOST" -p "$PORT" -U "$PG_USER" --slot="$SLOT")
+    if [[ "$ACTION" == create-slot ]]; then
+      slot_args+=(--create-slot --if-not-exists)
+    else
+      slot_args+=(--drop-slot)
+    fi
+    run_pg "${slot_args[@]}" >/dev/null
+    rm -rf "$slot_dir"
+    printf '{"slot":"%s","action":"%s"}\n' "$SLOT" "$ACTION" ;;
+  receive-wal)
+    [[ "$REMOTE" == 1 ]] || die 'receive-wal is only available in remote mode'
+    [[ -n "$SLOT" ]] || die 'slot is required'
+    [[ -n "$ENDPOS" ]] || die 'endpos is required'
+    wal_path="${WAL_DIR:-$BACKUP_DIR/wal}"
+    [[ "$wal_path" == "$BACKUP_DIR"/* ]] || die 'wal-dir must be inside backup-dir'
+    mkdir -p "$wal_path"; chown "$run_uid:$run_gid" "$wal_path"; chmod 0750 "$wal_path"
+    run_pg /usr/lib/postgresql/17/bin/pg_receivewal -w -D "$(map_path "$wal_path")" -h "$HOST" -p "$PORT" -U "$PG_USER" \
+      --slot="$SLOT" --endpos="$ENDPOS" --no-loop --synchronous --status-interval=10 >/dev/null
+    json_result "$wal_path" "$wal_path" ;;
   backup-full)
     output="${OUTPUT:-$set_root/full}"
     mkdir -p "$output"; chown -R "$run_uid:$run_gid" "$output"
     prepare_tablespace_destinations
-    backup_args=(/usr/lib/postgresql/17/bin/pg_basebackup -h "$HOST" -p "$PORT" -U "$PG_USER" \
+    backup_args=(/usr/lib/postgresql/17/bin/pg_basebackup -w -h "$HOST" -p "$PORT" -U "$PG_USER" \
       -D "$(map_path "$output")" -Fp -X stream -c fast -P --manifest-checksums=SHA256)
+    if [[ "$REMOTE" == 1 ]]; then
+      [[ -n "$SLOT" ]] || die 'slot is required for remote backup'
+      backup_args+=(--slot="$SLOT")
+    fi
     for mapping in "${TABLESPACE_MAPPINGS[@]:-}"; do
       [[ -n "$mapping" ]] || continue
       backup_args+=(--tablespace-mapping="$(map_tablespace_mapping "$mapping")")
@@ -146,9 +196,13 @@ case "$ACTION" in
     output="${OUTPUT:-$set_root/incremental/$(date +%s)}"
     mkdir -p "$output"; chown -R "$run_uid:$run_gid" "$output"
     prepare_tablespace_destinations
-    backup_args=(/usr/lib/postgresql/17/bin/pg_basebackup -h "$HOST" -p "$PORT" -U "$PG_USER" \
+    backup_args=(/usr/lib/postgresql/17/bin/pg_basebackup -w -h "$HOST" -p "$PORT" -U "$PG_USER" \
       -D "$(map_path "$output")" -Fp -X stream -c fast -P \
       --incremental="$(map_path "$BASE_MANIFEST")" --manifest-checksums=SHA256)
+    if [[ "$REMOTE" == 1 ]]; then
+      [[ -n "$SLOT" ]] || die 'slot is required for remote backup'
+      backup_args+=(--slot="$SLOT")
+    fi
     for mapping in "${TABLESPACE_MAPPINGS[@]:-}"; do
       [[ -n "$mapping" ]] || continue
       backup_args+=(--tablespace-mapping="$(map_tablespace_mapping "$mapping")")

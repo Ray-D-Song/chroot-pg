@@ -9,6 +9,7 @@ source "$ROOT_DIR/versions.env"
 [[ -x "$ROOTFS/usr/lib/postgresql/17/bin/psql" ]]
 [[ -x "$ROOTFS/usr/lib/postgresql/17/bin/pg_isready" ]]
 [[ -x "$ROOTFS/usr/lib/postgresql/17/bin/pg_basebackup" ]]
+[[ -x "$ROOTFS/usr/lib/postgresql/17/bin/pg_receivewal" ]]
 [[ -x "$ROOTFS/usr/lib/postgresql/17/bin/pg_combinebackup" ]]
 [[ -x "$ROOTFS/usr/lib/postgresql/17/bin/pg_verifybackup" ]]
 actual="$(chroot "$ROOTFS" dpkg-query -W -f='${Version}' postgresql-17)"

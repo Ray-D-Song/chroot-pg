@@ -38,7 +38,12 @@ sudo ./install.sh --prefix /opt/chroot-pg --data-dir /var/lib/chroot-pg/data \
 数据库集群位于数据目录下的 `data` 子目录，例如 `/var/lib/chroot-pg/data/data`。`install.sh` 在该集群的 `postgresql.conf` 与 `pg_hba.conf` 末尾维护一段 `# BEGIN chroot-pg managed settings` 到 `# END chroot-pg managed settings` 的区块，每次安装都会重写它。自定义配置请写在区块之外；`pg_hba.conf` 先匹配先生效，收紧来源地址时把自己的规则放在区块之前。
 
 安装包同时提供 `bin/chroot-pg-backup`，用于以 PostgreSQL 用户调用
-`pg_basebackup`、`pg_combinebackup` 和 `pg_verifybackup`。安装器会维护
-PG17 物理备份所需的 WAL archive、WAL summary 和 replication 连接配置。
+`pg_basebackup`、`pg_receivewal`、`pg_combinebackup` 和 `pg_verifybackup`。
+本机模式传入 `--data-dir` 并继续使用 WAL archive；远程模式传入
+`--remote`，不绑定或清理本机 PGDATA，备份文件写入 `--backup-dir`，并可用
+`create-slot`、`receive-wal --slot SLOT --endpos LSN`、`drop-slot` 管理复制槽和
+WAL。所有模式都通过临时 `PGPASSFILE` 传递密码，不把密码放到命令行。
+安装器会维护 PG17 物理备份所需的 WAL archive、WAL summary 和 replication
+连接配置。
 
 `sudo ./uninstall.sh` 删除服务和 rootfs、保留数据；仅在确认不再需要数据库时使用 `sudo ./uninstall.sh --purge-data`。
