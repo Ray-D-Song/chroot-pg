@@ -106,10 +106,12 @@ prepare_tablespace_destinations() {
     new="${mapping#*=}"
     map_path "$new" >/dev/null
     mkdir -p "$new"
-    parent="${new%/*}"
-    chown "$run_uid:$run_gid" "$parent"
-    chmod 0750 "$parent"
-    chown -R "$run_uid:$run_gid" "$new"
+    parent="$new"
+    while [[ "$parent" != "$BACKUP_DIR" && "$parent" == "$BACKUP_DIR"/* ]]; do
+      chown "$run_uid:$run_gid" "$parent"
+      chmod 0750 "$parent"
+      parent="${parent%/*}"
+    done
   done
 }
 
