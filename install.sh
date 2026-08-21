@@ -121,6 +121,7 @@ cp -a "$SOURCE_ROOTFS" "$new_rootfs"
 if [[ -d "$PREFIX/rootfs" ]]; then rm -rf "$PREFIX/rootfs"; fi
 mv "$new_rootfs" "$PREFIX/rootfs"
 install -D -m 0755 "$SCRIPT_DIR/bin/chroot-pg-run" "$PREFIX/bin/chroot-pg-run"
+install -D -m 0755 "$SCRIPT_DIR/bin/chroot-pg-backup" "$PREFIX/bin/chroot-pg-backup"
 ensure_chroot_identity "$PREFIX/rootfs"
 # PostgreSQL creates its local socket and lock files below /var/run/postgresql
 # (a link to /run on Debian). This directory must match the host runtime UID.
@@ -152,10 +153,20 @@ apply_managed_settings() {
 listen_addresses = '$LISTEN_ADDRESSES'
 port = $PORT
 password_encryption = 'scram-sha-256'
+wal_level = replica
+archive_mode = on
+archive_command = 'test -f /var/lib/postgresql/wal-archive/%f || cp %p /var/lib/postgresql/wal-archive/%f'
+archive_timeout = 300s
+summarize_wal = on
+wal_summary_keep_time = 30d
+max_wal_senders = 4
+max_replication_slots = 2
 EOF
   write_managed_block "$PGDATA_HOST/pg_hba.conf" <<'EOF'
 host all all 0.0.0.0/0 scram-sha-256
 host all all ::0/0 scram-sha-256
+host replication all 0.0.0.0/0 scram-sha-256
+host replication all ::0/0 scram-sha-256
 EOF
 }
 
@@ -171,6 +182,10 @@ discard_stray_conf() {
 
 if [[ ! -f "$PGDATA_HOST/PG_VERSION" ]]; then
   resolve_password_for_new_install
+  if ! chroot "$PREFIX/rootfs" /usr/bin/locale -a 2>/dev/null | grep -Eiq '^C\.(UTF-8|utf8)$'; then
+    echo "rootfs is missing the required C.UTF-8 locale; rebuild the chroot-pg package" >&2
+    exit 1
+  fi
   umask 077
   cat > "$CREDENTIALS" <<EOF
 POSTGRES_USER=postgres
@@ -197,9 +212,10 @@ EOF
   trap rollback_initialization EXIT
   printf '%s\n' "$password" > "$password_file"
   chown "$RUN_UID:$RUN_GID" "$password_file"; chmod 0600 "$password_file"
-  chroot --userspec="$RUN_UID:$RUN_GID" "$PREFIX/rootfs" /usr/lib/postgresql/17/bin/initdb \
+  chroot --userspec="$RUN_UID:$RUN_GID" "$PREFIX/rootfs" /usr/bin/env \
+    LANG=C.UTF-8 LC_ALL=C.UTF-8 /usr/lib/postgresql/17/bin/initdb \
     -D /var/lib/postgresql/data --username=postgres --pwfile=/var/lib/postgresql/.init-password \
-    --auth-host=scram-sha-256 --auth-local=peer --no-instructions
+    --auth-host=scram-sha-256 --auth-local=peer --locale=C.UTF-8 --no-instructions
   rm -f "$password_file"
   cleanup_mounts
   trap - EXIT
@@ -210,6 +226,7 @@ else
 fi
 
 apply_managed_settings
+install -d -o "$RUN_UID" -g "$RUN_GID" -m 0700 "$DATA_DIR/wal-archive"
 discard_stray_conf "$DATA_DIR/postgresql.conf"
 discard_stray_conf "$DATA_DIR/pg_hba.conf"
 

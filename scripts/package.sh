@@ -16,9 +16,10 @@ mkdir -p "$STAGE/systemd" "$STAGE/bin"
 cp -a "$ROOTFS" "$STAGE/rootfs"
 cp "$ROOT_DIR/install.sh" "$ROOT_DIR/uninstall.sh" "$ROOT_DIR/status.sh" "$STAGE/"
 cp "$ROOT_DIR/bin/chroot-pg-run" "$STAGE/bin/"
+cp "$ROOT_DIR/bin/chroot-pg-backup" "$STAGE/bin/"
 cp "$ROOT_DIR/systemd/chroot-pg.service.in" "$STAGE/systemd/"
 cp "$ROOT_DIR/README.md" "$STAGE/"
-chmod 0755 "$STAGE"/*.sh "$STAGE/bin/chroot-pg-run"
+chmod 0755 "$STAGE"/*.sh "$STAGE/bin/chroot-pg-run" "$STAGE/bin/chroot-pg-backup"
 cat > "$STAGE/manifest.json" <<EOF
 {"bundle_version":"$VERSION","architecture":"amd64","rootfs":"debian-$DEBIAN_SUITE","postgres_package_version":"$POSTGRES_PACKAGE_VERSION"}
 EOF
@@ -26,4 +27,3 @@ mkdir -p "$DIST_DIR"
 tar --numeric-owner -C "$BUILD_DIR" -czf "$DIST_DIR/$NAME.tar.gz" "$NAME"
 (cd "$DIST_DIR" && sha256sum "$NAME.tar.gz" > SHA256SUMS)
 echo "$DIST_DIR/$NAME.tar.gz"
-
