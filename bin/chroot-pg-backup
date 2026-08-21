@@ -157,7 +157,7 @@ case "$ACTION" in
   verify)
     [[ -n "$TARGET" ]] || die 'target is required'
     wal_path="${WAL_DIR:-$BACKUP_DIR/wal}"
-    run_pg /usr/lib/postgresql/17/bin/pg_verifybackup --wal-directory="$(map_path "$wal_path")" "$(map_path "$TARGET")"
+    run_pg /usr/lib/postgresql/17/bin/pg_verifybackup --wal-directory="$(map_path "$wal_path")" "$(map_path "$TARGET")" >/dev/null
     json_result "$TARGET" "$TARGET/backup_manifest" ;;
   combine)
     [[ -n "$OUTPUT" ]] || die 'output is required'
@@ -170,6 +170,6 @@ case "$ACTION" in
       args+=(--tablespace-mapping="$(map_tablespace_mapping "$mapping")")
     done
     for input in "${COMBINE_INPUTS[@]}"; do args+=("$(map_path "$input")"); done
-    run_pg "${args[@]}"
+    run_pg "${args[@]}" >/dev/null
     json_result "$OUTPUT" "$OUTPUT/backup_manifest" ;;
 esac
