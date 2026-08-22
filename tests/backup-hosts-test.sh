@@ -59,9 +59,12 @@ hosts_content="$(chroot --userspec="$run_uid:$run_gid" "$ROOTFS" cat /etc/hosts)
   exit 1
 }
 
-if ! "$PREFIX/bin/chroot-pg-backup" --help 2>&1 | grep -q -- '--remote'; then
-  echo 'chroot-pg-backup help does not mention --remote' >&2
-  exit 1
-fi
+help_text="$("$PREFIX/bin/chroot-pg-backup" --help 2>&1)"
+for token in --remote create-slot drop-slot receive-wal --slot --ssl-mode; do
+  if ! grep -q -- "$token" <<<"$help_text"; then
+    echo "chroot-pg-backup help does not mention $token" >&2
+    exit 1
+  fi
+done
 
 echo 'backup-hosts-test passed'
