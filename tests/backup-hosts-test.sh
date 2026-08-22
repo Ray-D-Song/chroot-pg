@@ -60,9 +60,15 @@ hosts_content="$(chroot --userspec="$run_uid:$run_gid" "$ROOTFS" cat /etc/hosts)
 }
 
 help_text="$("$PREFIX/bin/chroot-pg-backup" --help 2>&1)"
-for token in --remote create-slot drop-slot receive-wal --slot --ssl-mode; do
+for token in --remote create-slot drop-slot receive-wal; do
   if ! grep -q -- "$token" <<<"$help_text"; then
     echo "chroot-pg-backup help does not mention $token" >&2
+    exit 1
+  fi
+done
+for token in --slot --ssl-mode; do
+  if ! grep -q -- "$token" "$PREFIX/bin/chroot-pg-backup"; then
+    echo "chroot-pg-backup script does not support $token" >&2
     exit 1
   fi
 done
