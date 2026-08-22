@@ -9,6 +9,8 @@ DATA_DIR="/var/lib/chroot-pg-test-$TEST_ID"
 SERVICE="chroot-pg-test-$TEST_ID"
 PORT="$(( 20000 + RANDOM % 20000 ))"
 CREDENTIALS="/etc/chroot-pg-test-$TEST_ID/credentials"
+BACKUP_DIR="/var/lib/chroot-pg-backup-test-$TEST_ID"
+BACKUP_SET_ID="smoke-set"
 PG_BIN='/usr/lib/postgresql/17/bin'
 PACKAGE_DIR=''
 
@@ -18,7 +20,7 @@ cleanup() {
   fi
   umount "$PREFIX/rootfs/dev/shm" 2>/dev/null || true
   umount "$PREFIX/rootfs/var/lib/postgresql" 2>/dev/null || true
-  rm -rf "$PREFIX" "$DATA_DIR" "$(dirname "$CREDENTIALS")"
+  rm -rf "$PREFIX" "$DATA_DIR" "$BACKUP_DIR" "$(dirname "$CREDENTIALS")"
   rm -rf "$WORK_DIR"
 }
 trap cleanup EXIT
@@ -49,6 +51,70 @@ wait_for_postgres() {
   return 1
 }
 
+pg_exec() {
+  PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" \
+    -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -v ON_ERROR_STOP=1 "$@"
+}
+
+pg_query() {
+  pg_exec -tAc "$1" | sed -e 's/^ *//' -e 's/ *$//' | tr -d '\r'
+}
+
+wait_for_wal_archive() {
+  for _ in $(seq 1 60); do
+    compgen -G "$DATA_DIR/wal-archive/[0-9A-Fa-f]*" >/dev/null && return 0
+    sleep 1
+  done
+  echo 'WAL archive file was not created in time' >&2
+  return 1
+}
+
+switch_wal_and_wait_for_archive() {
+  local before current
+  before="$(pg_query 'select archived_count from pg_stat_archiver')"
+  pg_exec -tAc 'select pg_switch_wal()' >/dev/null
+  for _ in $(seq 1 60); do
+    current="$(pg_query 'select archived_count from pg_stat_archiver')"
+    if [[ "$current" =~ ^[0-9]+$ && "$before" =~ ^[0-9]+$ ]] && (( current > before )); then
+      return 0
+    fi
+    sleep 1
+  done
+  echo 'WAL archiver did not complete after pg_switch_wal' >&2
+  return 1
+}
+
+sync_wal_archive() {
+  install -d -o chroot-pg -g chroot-pg -m 0750 "$BACKUP_DIR/wal"
+  for wal_file in "$DATA_DIR/wal-archive"/*; do
+    [[ -f "$wal_file" ]] || continue
+    case "$(basename "$wal_file")" in
+      [0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]*|*.history)
+        install -o chroot-pg -g chroot-pg -m 0600 "$wal_file" "$BACKUP_DIR/wal/$(basename "$wal_file")" ;;
+    esac
+  done
+}
+
+wait_for_wal_summary() {
+  local count
+  for _ in $(seq 1 60); do
+    count="$(pg_exec -tAc 'select count(*) from pg_available_wal_summaries()' | tr -d '[:space:]')"
+    if [[ "$count" =~ ^[1-9][0-9]*$ ]]; then return 0; fi
+    sleep 1
+  done
+  echo 'WAL summary was not generated in time' >&2
+  return 1
+}
+
+backup_args=(
+  --rootfs "$PREFIX/rootfs"
+  --data-dir "$DATA_DIR"
+  --credentials-file "$CREDENTIALS"
+  --backup-dir "$BACKUP_DIR"
+  --port "$PORT"
+  --set-id "$BACKUP_SET_ID"
+)
+
 wait_for_postgres
 # The rules must live in the running cluster's pg_hba.conf, not merely on disk
 # somewhere: a loopback-only smoke test would otherwise pass without them.
@@ -62,12 +128,108 @@ PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.
   "select current_setting('archive_command') <> ''" | grep -Fx t
 PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -v ON_ERROR_STOP=1 \
   -c 'create table ci_smoke(id integer primary key, note text)' -c "insert into ci_smoke values (1, 'ok')" -c 'select * from ci_smoke'
+# PostgreSQL permits superusers to use the replication protocol even when the
+# rolreplication flag is false. Verify the actual protocol path used by
+# pg_basebackup instead of relying only on catalog metadata.
+PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/pg_basebackup" \
+  -h 127.0.0.1 -p "$PORT" -U postgres -D /tmp/chroot-pg-replication-check \
+  -Fp -X none --no-manifest >/dev/null
+rm -rf "$PREFIX/rootfs/tmp/chroot-pg-replication-check"
 PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -tAc 'select pg_switch_wal()'
-for _ in $(seq 1 20); do
-  compgen -G "$DATA_DIR/wal-archive/[0-9A-Fa-f]*" >/dev/null && break
-  sleep 1
-done
-compgen -G "$DATA_DIR/wal-archive/[0-9A-Fa-f]*" >/dev/null || { echo 'WAL archive file was not created' >&2; exit 1; }
+wait_for_wal_archive
+
+echo '==> verify PostgreSQL full, incremental, verify, combine, and PITR'
+pg_exec -c "create table ci_backup(id integer primary key, note text not null)" \
+  -c "insert into ci_backup values (1, 'baseline')"
+pg_exec -tAc 'select pg_switch_wal()' >/dev/null
+wait_for_wal_archive
+
+FULL_DIR="$BACKUP_DIR/sets/$BACKUP_SET_ID/full"
+INCREMENTAL_DIR="$BACKUP_DIR/sets/$BACKUP_SET_ID/incremental/inc-1"
+COMBINED_DIR="$BACKUP_DIR/sets/$BACKUP_SET_ID/combined"
+BROKEN_WAL_DIR="$BACKUP_DIR/broken-wal"
+
+"$PREFIX/bin/chroot-pg-backup" "${backup_args[@]}" --output "$FULL_DIR" \
+  backup-full >"$WORK_DIR/full-result.json"
+[[ -s "$FULL_DIR/backup_manifest" ]] || { echo 'full backup manifest is missing' >&2; exit 1; }
+pg_exec -tAc 'select pg_switch_wal()' >/dev/null
+wait_for_wal_archive
+sync_wal_archive
+"$PREFIX/bin/chroot-pg-backup" "${backup_args[@]}" --target "$FULL_DIR" \
+  verify >"$WORK_DIR/full-verify-result.json"
+
+if "$PREFIX/bin/chroot-pg-backup" "${backup_args[@]}" \
+  --base-manifest "$BACKUP_DIR/missing/backup_manifest" \
+  --output "$BACKUP_DIR/sets/$BACKUP_SET_ID/incremental/missing" \
+  backup-incremental >"$WORK_DIR/missing-base-result.json" 2>"$WORK_DIR/missing-base-error.log"; then
+  echo 'incremental backup unexpectedly accepted a missing base manifest' >&2
+  exit 1
+fi
+
+pg_exec -c "insert into ci_backup values (2, 'incremental')"
+pg_exec -tAc 'select pg_switch_wal()' >/dev/null
+wait_for_wal_archive
+wait_for_wal_summary
+"$PREFIX/bin/chroot-pg-backup" "${backup_args[@]}" --output "$INCREMENTAL_DIR" \
+  --base-manifest "$FULL_DIR/backup_manifest" backup-incremental >"$WORK_DIR/incremental-result.json"
+[[ -s "$INCREMENTAL_DIR/backup_manifest" ]] || { echo 'incremental backup manifest is missing' >&2; exit 1; }
+pg_exec -tAc 'select pg_switch_wal()' >/dev/null
+wait_for_wal_archive
+sync_wal_archive
+"$PREFIX/bin/chroot-pg-backup" "${backup_args[@]}" --target "$INCREMENTAL_DIR" \
+  verify >"$WORK_DIR/incremental-verify-result.json"
+
+cp "$FULL_DIR/backup_manifest" "$WORK_DIR/full-backup-manifest"
+printf '{}\n' >"$FULL_DIR/backup_manifest"
+if "$PREFIX/bin/chroot-pg-backup" "${backup_args[@]}" --target "$FULL_DIR" \
+  verify >"$WORK_DIR/corrupt-manifest-result.json" 2>"$WORK_DIR/corrupt-manifest-error.log"; then
+  echo 'pg_verifybackup unexpectedly accepted a corrupt manifest' >&2
+  exit 1
+fi
+mv "$WORK_DIR/full-backup-manifest" "$FULL_DIR/backup_manifest"
+chown chroot-pg:chroot-pg "$FULL_DIR/backup_manifest"
+chmod 0600 "$FULL_DIR/backup_manifest"
+
+install -d -o chroot-pg -g chroot-pg -m 0750 "$BROKEN_WAL_DIR"
+if "$PREFIX/bin/chroot-pg-backup" "${backup_args[@]}" --target "$FULL_DIR" \
+  --wal-dir "$BROKEN_WAL_DIR" verify >"$WORK_DIR/missing-wal-result.json" 2>"$WORK_DIR/missing-wal-error.log"; then
+  echo 'pg_verifybackup unexpectedly accepted a missing WAL directory' >&2
+  exit 1
+fi
+
+"$PREFIX/bin/chroot-pg-backup" "${backup_args[@]}" --output "$COMBINED_DIR" \
+  --input "$FULL_DIR" --input "$INCREMENTAL_DIR" combine >"$WORK_DIR/combine-result.json"
+[[ -s "$COMBINED_DIR/backup_manifest" ]] || { echo 'combined backup manifest is missing' >&2; exit 1; }
+"$PREFIX/bin/chroot-pg-backup" "${backup_args[@]}" --target "$COMBINED_DIR" \
+  verify >"$WORK_DIR/combined-verify-result.json"
+
+pg_exec -c "insert into ci_backup values (3, 'pitr-before')"
+PITR_TARGET="$(pg_query 'select clock_timestamp()::text')"
+sleep 2
+pg_exec -c "insert into ci_backup values (4, 'pitr-after')"
+switch_wal_and_wait_for_archive
+sync_wal_archive
+
+systemctl stop "$SERVICE"
+mv "$DATA_DIR/data" "$DATA_DIR/data.before-pitr"
+cp -a "$COMBINED_DIR" "$DATA_DIR/data"
+chown -R chroot-pg:chroot-pg "$DATA_DIR/data"
+cat >"$DATA_DIR/data/postgresql.auto.conf" <<EOF
+restore_command = 'cp /var/lib/postgresql/wal-archive/%f %p'
+recovery_target_time = '$PITR_TARGET'
+recovery_target_inclusive = true
+recovery_target_action = 'promote'
+EOF
+touch "$DATA_DIR/data/recovery.signal"
+chown chroot-pg:chroot-pg "$DATA_DIR/data/postgresql.auto.conf" "$DATA_DIR/data/recovery.signal"
+chmod 0600 "$DATA_DIR/data/postgresql.auto.conf" "$DATA_DIR/data/recovery.signal"
+systemctl start "$SERVICE"
+wait_for_postgres
+pg_exec -tAc 'select pg_is_in_recovery()' | grep -Fx f
+PITR_ROWS="$(pg_query "select string_agg(note, ',' order by id) from ci_backup")"
+[[ "$PITR_ROWS" == 'baseline,incremental,pitr-before' ]] || { echo "unexpected PITR rows: $PITR_ROWS" >&2; exit 1; }
+[[ ! -e "$DATA_DIR/data/recovery.signal" ]] || { echo 'recovery.signal was not cleaned after promotion' >&2; exit 1; }
+
 systemctl restart "$SERVICE"
 wait_for_postgres
 PGPASSWORD="$POSTGRES_PASSWORD" chroot "$PREFIX/rootfs" "$PG_BIN/psql" -h 127.0.0.1 -p "$PORT" -U postgres -d postgres -tAc 'select note from ci_smoke where id = 1' | grep -Fx ok
