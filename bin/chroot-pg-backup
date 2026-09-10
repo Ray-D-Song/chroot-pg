@@ -147,6 +147,18 @@ prepare_tablespace_destinations() {
   done
 }
 
+prepare_combine_output() {
+  local parent
+  map_path "$OUTPUT" >/dev/null
+  parent="$(dirname "$OUTPUT")"
+  mkdir -p "$parent"
+  while [[ "$parent" != "$BACKUP_DIR" && "$parent" == "$BACKUP_DIR"/* ]]; do
+    chown "$run_uid:$run_gid" "$parent"
+    chmod 0750 "$parent"
+    parent="${parent%/*}"
+  done
+}
+
 run_pg() {
   local -a env_args=(LANG=C.UTF-8 LC_ALL=C.UTF-8 PGPASSFILE=/run/chroot-pg-backup.pgpass PGSSLMODE="$SSL_MODE")
   if [[ "$SSL_MODE" == verify-ca || "$SSL_MODE" == verify-full ]]; then env_args+=(PGSSLROOTCERT=/run/chroot-pg-backup-ca.pem); fi
@@ -227,7 +239,7 @@ case "$ACTION" in
   combine)
     [[ -n "$OUTPUT" ]] || die 'output is required'
     (( ${#COMBINE_INPUTS[@]} > 0 )) || die 'at least one input is required'
-    mkdir -p "$(dirname "$OUTPUT")"; chown "$run_uid:$run_gid" "$(dirname "$OUTPUT")"
+    prepare_combine_output
     prepare_tablespace_destinations
     args=(/usr/lib/postgresql/17/bin/pg_combinebackup -o "$(map_path "$OUTPUT")")
     for mapping in "${TABLESPACE_MAPPINGS[@]:-}"; do

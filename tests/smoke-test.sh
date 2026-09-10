@@ -146,7 +146,7 @@ wait_for_wal_archive
 
 FULL_DIR="$BACKUP_DIR/sets/$BACKUP_SET_ID/full"
 INCREMENTAL_DIR="$BACKUP_DIR/sets/$BACKUP_SET_ID/incremental/inc-1"
-COMBINED_DIR="$BACKUP_DIR/sets/$BACKUP_SET_ID/combined"
+COMBINED_DIR="$BACKUP_DIR/sets/$BACKUP_SET_ID/.restore/smoke-restore/cluster"
 BROKEN_WAL_DIR="$BACKUP_DIR/broken-wal"
 
 "$PREFIX/bin/chroot-pg-backup" "${backup_args[@]}" --output "$FULL_DIR" \
@@ -197,6 +197,7 @@ if "$PREFIX/bin/chroot-pg-backup" "${backup_args[@]}" --target "$FULL_DIR" \
   exit 1
 fi
 
+install -d -o root -g root -m 0750 "$BACKUP_DIR/sets/$BACKUP_SET_ID/.restore"
 "$PREFIX/bin/chroot-pg-backup" "${backup_args[@]}" --output "$COMBINED_DIR" \
   --input "$FULL_DIR" --input "$INCREMENTAL_DIR" combine >"$WORK_DIR/combine-result.json"
 [[ -s "$COMBINED_DIR/backup_manifest" ]] || { echo 'combined backup manifest is missing' >&2; exit 1; }
