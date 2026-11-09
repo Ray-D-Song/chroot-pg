@@ -59,8 +59,12 @@ layout_check_parent() {
   while :; do
     owner="$(stat -c %u -- "$path")"
     mode="$(stat -c %a -- "$path")"
-    [[ "$owner" == 0 && $((8#$mode & 0022)) == 0 && ! -L "$path" ]] \
+    [[ "$owner" == 0 && ! -L "$path" ]] \
       || { layout_fail "root-owned, non-writable dedicated parent required: $path"; return 1; }
+    if ((8#$mode & 0022)); then
+      [[ "$path" == /var/log && "$mode" == 775 && "$(stat -c %G -- "$path")" == syslog ]] \
+        || { layout_fail "root-owned, non-writable dedicated parent required: $path"; return 1; }
+    fi
     [[ "$path" != / ]] || break
     path="$(dirname "$path")"
   done
