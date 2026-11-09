@@ -60,10 +60,10 @@ layout_check_parent() {
     owner="$(stat -c %u -- "$path")"
     mode="$(stat -c %a -- "$path")"
     [[ "$owner" == 0 && ! -L "$path" ]] \
-      || { layout_fail "root-owned, non-writable dedicated parent required: $path"; return 1; }
+      || { layout_fail "root-owned, non-writable dedicated parent required: $path (owner=$owner mode=$mode)"; return 1; }
     if ((8#$mode & 0022)); then
       [[ "$path" == /var/log && "$mode" == 775 && "$(stat -c %G -- "$path")" == syslog ]] \
-        || { layout_fail "root-owned, non-writable dedicated parent required: $path"; return 1; }
+        || { layout_fail "root-owned, non-writable dedicated parent required: $path (owner=$owner mode=$mode)"; return 1; }
     fi
     [[ "$path" != / ]] || break
     path="$(dirname "$path")"
@@ -129,7 +129,6 @@ layout_selinux_enabled() {
 layout_prepare() {
   layout_check_paths || return 1
   layout_check_path "$PREFIX/bin" || return 1
-  layout_check_mounts || return 1
   layout_home=0
   local key path probe options fs command status
   for key in "${layout_keys[@]}"; do
@@ -248,8 +247,7 @@ layout_validate_uninstall() {
   layout_check_parent "$PREFIX" || return 1
   layout_check_parent "$(dirname "$(layout_record_path)")" || return 1
   layout_verify_record || return 1
-  layout_check_service || return 1
-  layout_check_mounts
+  layout_check_service
 }
 
 layout_check_mounts() {

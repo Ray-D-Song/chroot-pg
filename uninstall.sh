@@ -22,7 +22,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/install-layout.sh"
 layout_component=pg
 layout_check_paths
-layout_check_mounts
 if [[ -e "$(layout_record_path)" || -L "$(layout_record_path)" ]]; then
   layout_validate_uninstall
 else
@@ -31,7 +30,10 @@ else
 [[ "$CREDENTIALS" == /etc/* && "$CREDENTIALS" != /etc ]] || { echo 'refusing unsafe credentials file' >&2; exit 2; }
 
 fi
-systemctl disable --now "$SERVICE_NAME" 2>/dev/null || true
+layout_check_service
+if systemctl is-active --quiet "$SERVICE_NAME"; then systemctl stop "$SERVICE_NAME"; fi
+layout_check_mounts
+systemctl disable "$SERVICE_NAME" 2>/dev/null || true
 rm -f "/etc/systemd/system/$SERVICE_NAME.service"
 systemctl daemon-reload
 rm -rf "$PREFIX"
