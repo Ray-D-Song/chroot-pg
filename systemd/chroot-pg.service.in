@@ -1,6 +1,7 @@
 [Unit]
 Description=chroot-pg PostgreSQL 17
 After=network.target local-fs.target
+RequiresMountsFor=@PREFIX@ @DATA_DIR@
 
 [Service]
 Type=simple

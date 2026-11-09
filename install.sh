@@ -90,6 +90,9 @@ done
 [[ "$CREDENTIALS" == /* && "$CREDENTIALS" != / ]] || { echo 'credentials-file must be a non-root absolute path' >&2; exit 2; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/install-layout.sh"
+layout_component=pg
+layout_prepare
 SOURCE_ROOTFS="$SCRIPT_DIR/rootfs"
 [[ -x "$SOURCE_ROOTFS/usr/lib/postgresql/17/bin/postgres" ]] || { echo "rootfs is missing from $SOURCE_ROOTFS" >&2; exit 1; }
 
@@ -180,6 +183,7 @@ discard_stray_conf() {
     || rm -f "$file"
 }
 
+layout_apply
 if [[ ! -f "$PGDATA_HOST/PG_VERSION" ]]; then
   resolve_password_for_new_install
   if ! chroot "$PREFIX/rootfs" /usr/bin/locale -a 2>/dev/null | grep -Eiq '^C\.(UTF-8|utf8)$'; then
@@ -234,7 +238,9 @@ sed -e "s|@PREFIX@|$PREFIX|g" -e "s|@DATA_DIR@|$DATA_DIR|g" \
   -e "s|@RUN_UID@|$RUN_UID|g" -e "s|@RUN_GID@|$RUN_GID|g" \
   -e "s|@PORT@|$PORT|g" -e "s|@LISTEN_ADDRESSES@|$LISTEN_ADDRESSES|g" \
   "$SCRIPT_DIR/systemd/chroot-pg.service.in" > "/etc/systemd/system/$SERVICE_NAME.service"
+layout_finish
 systemctl daemon-reload
+layout_check_service
 systemctl enable "$SERVICE_NAME"
 systemctl start "$SERVICE_NAME"
 echo "Installed $SERVICE_NAME. Check: systemctl status $SERVICE_NAME"

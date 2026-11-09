@@ -1,5 +1,27 @@
 # chroot-pg
 
+## Custom home installations
+
+The package supports a root-owned dedicated home layout. Keep runtime
+(`--prefix`) separate from persistent data, configuration and credentials.
+The installer validates paths, existing service ownership and executable mount
+options before stopping any service. For home paths with SELinux enabled it
+requires `semanage`, `restorecon` and `matchpathcon`; it does not disable
+SELinux or change permissions on personal home directories. Parent directories
+must already have suitable ownership, permissions and labels (JarMaster
+prepares its dedicated installation root).
+
+The systemd unit waits for its actual filesystems with `RequiresMountsFor`.
+A root-only `.install-layout-<service-name>` record is kept with persistent
+configuration. Reinstall and uninstall validate the same recorded paths.
+Ordinary uninstall preserves data, configuration, credentials and the record;
+only explicit `--purge-data` removes them. Symlinks, overlapping managed paths
+and mounted content below the runtime prefix are rejected before deletion.
+
+Run `bash tests/install-layout-test.sh` for non-root safety checks. Real
+service and SELinux Enforcing tests must use an isolated VM; the mocked safety
+checks do not establish runtime compatibility.
+
 离线 PostgreSQL 17 发行包，使用 Debian 12 AMD64 chroot 运行环境，供没有外网或宿主发行版不固定的 Linux 服务器使用。
 
 ## 构建与发布

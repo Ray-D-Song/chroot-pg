@@ -31,6 +31,10 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y debootstrap gnupg
+      - name: Verify installation layout safety
+        run: bash tests/install-layout-test.sh
+      - name: Check installation scripts
+        run: bash -n install.sh uninstall.sh install-layout.sh scripts/package.sh
       - name: Validate manual release input
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.release }}
         run: |
@@ -100,6 +104,10 @@ jobs:
       - name: Verify package checksum
         run: (cd dist && sha256sum --check SHA256SUMS)
       - name: Run real service smoke test
+        run: sudo -E bash tests/smoke-test.sh "$(find dist -name 'chroot-pg-*-linux-amd64.tar.gz' -print -quit)" "$GITHUB_RUN_ID"
+      - name: Verify home installation, reinstall and uninstall
+        env:
+          CHROOT_TEST_LAYOUT: home
         run: sudo -E bash tests/smoke-test.sh "$(find dist -name 'chroot-pg-*-linux-amd64.tar.gz' -print -quit)" "$GITHUB_RUN_ID"
       - name: Verify remote hosts bind-mount
         run: sudo bash tests/backup-hosts-test.sh "$(find dist -name 'chroot-pg-*-linux-amd64.tar.gz' -print -quit)"

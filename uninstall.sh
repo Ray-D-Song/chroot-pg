@@ -18,10 +18,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ $EUID -eq 0 ]] || { echo 'run uninstall.sh with sudo or as root' >&2; exit 1; }
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/install-layout.sh"
+layout_component=pg
+layout_check_paths
+layout_check_mounts
+if [[ -e "$(layout_record_path)" || -L "$(layout_record_path)" ]]; then
+  layout_validate_uninstall
+else
 [[ "$PREFIX" == /opt/* && "$PREFIX" != /opt ]] || { echo 'refusing unsafe prefix' >&2; exit 2; }
 [[ "$DATA_DIR" == /var/lib/* && "$DATA_DIR" != /var/lib ]] || { echo 'refusing unsafe data directory' >&2; exit 2; }
 [[ "$CREDENTIALS" == /etc/* && "$CREDENTIALS" != /etc ]] || { echo 'refusing unsafe credentials file' >&2; exit 2; }
 
+fi
 systemctl disable --now "$SERVICE_NAME" 2>/dev/null || true
 rm -f "/etc/systemd/system/$SERVICE_NAME.service"
 systemctl daemon-reload
@@ -29,6 +38,7 @@ rm -rf "$PREFIX"
 if [[ "$PURGE_DATA" == true ]]; then
   rm -rf "$DATA_DIR"
   rm -f "$CREDENTIALS"
+  rm -f -- "$(layout_record_path)"
   echo "Removed service, rootfs, credentials, and data directory."
 else
   echo "Removed service and rootfs. Data and credentials were retained for a future reinstall."
