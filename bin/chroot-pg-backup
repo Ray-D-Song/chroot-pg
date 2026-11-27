@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
+original_args=("$@")
 
 # Privileged adapter for PostgreSQL 17's native physical backup tools.
 ROOTFS=''; DATA_DIR=''; CREDENTIALS=''; BACKUP_DIR=''
@@ -47,7 +49,7 @@ while [[ $# -gt 0 ]]; do
       esac
       ;;
     --remote) REMOTE=1; shift ;;
-    backup-full|backup-incremental|verify|combine|create-slot|drop-slot|receive-wal)
+    recover|backup-full|backup-incremental|verify|combine|create-slot|drop-slot|receive-wal)
       [[ -z "$ACTION" ]] || die "only one action is allowed"
       ACTION="$1"; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -65,6 +67,62 @@ fi
 [[ -n "$SET_ID" && "$SET_ID" =~ ^[A-Za-z0-9._-]+$ ]] || die 'invalid set-id'
 [[ -n "$ACTION" ]] || { usage; exit 2; }
 
+
+# Each tool invocation owns its lock and private mount namespace. FD 9 is
+# inherited by tools, so a killed shell cannot unlock a still-running tool.
+ROOTFS="$(readlink -f -- "$ROOTFS")"
+legacy_unmount() {
+  local point="$1" source="$2"
+  while mountpoint -q "$point"; do
+    [[ -e "$source" && "$(stat -Lc '%d:%i' "$point")" == "$(stat -Lc '%d:%i' "$source")" ]] || {
+      echo "refusing unknown backup mount: $point" >&2; return 1;
+    }
+    # No force/lazy unmount: an active user must keep its mount.
+    umount "$point" || return 1
+  done
+}
+if [[ "${JARMASTER_BACKUP_NS:-}" != "$(readlink /proc/self/ns/mnt)" ]]; then
+  install -d -m 0755 "$ROOTFS/run"
+  exec 9>"$ROOTFS/run/jarmaster-backup.lock"
+  chmod 0600 "$ROOTFS/run/jarmaster-backup.lock"
+  flock -n 9 || { echo 'another backup tool is running' >&2; exit 1; }
+  # Older helpers did not acquire this lock. Detect their chroot tools too.
+  for proc in /proc/[0-9]*; do
+    [[ "$(readlink "$proc/root" 2>/dev/null || true)" == "$ROOTFS" ]] || continue
+    executable="$(readlink "$proc/exe" 2>/dev/null || true)"
+    case "${executable##*/}" in xtrabackup|pg_basebackup|pg_receivewal|pg_combinebackup|pg_verifybackup)
+      echo "active backup tool: ${proc##*/}" >&2; exit 1 ;;
+    esac
+  done
+  legacy_unmount "$ROOTFS/etc/hosts" /etc/hosts
+  legacy_unmount "$ROOTFS/mnt/chroot-pg-backup" "$BACKUP_DIR"
+  if [[ "$REMOTE" == 0 ]]; then legacy_unmount "$ROOTFS/var/lib/postgresql" "$DATA_DIR"; fi
+  rm -f "$ROOTFS/run/chroot-pg-backup.pgpass" "$ROOTFS/run/chroot-pg-backup-ca.pem"
+  if [[ "$ACTION" == recover ]]; then exit 0; fi
+  exec unshare --mount --propagation private /bin/bash -c '
+    export JARMASTER_BACKUP_NS="$(readlink /proc/self/ns/mnt)"
+    exec "$@"
+  ' -- "$0" "${original_args[@]}"
+fi
+[[ -e /proc/$$/fd/9 ]] || { echo 'backup namespace has no ownership lock' >&2; exit 1; }
+child_pid=''
+run_tool() {
+  "$@" & child_pid=$!
+  local result=0
+  wait "$child_pid" || result=$?
+  child_pid=''
+  return "$result"
+}
+stop_tool() {
+  trap '' TERM INT
+  if [[ -n "$child_pid" ]]; then
+    kill -TERM "$child_pid" 2>/dev/null || true
+    wait "$child_pid" 2>/dev/null || true
+    child_pid=''
+  fi
+  exit 143
+}
+trap stop_tool TERM INT
 password="$(awk -F= '$1 == "POSTGRES_PASSWORD" { print substr($0, index($0, "=") + 1) }' "$CREDENTIALS")"
 [[ -n "$password" ]] || die 'credentials file has no POSTGRES_PASSWORD'
 [[ "$PORT" =~ ^[0-9]+$ ]] || die 'invalid port'
@@ -89,15 +147,19 @@ DATA_MOUNT="$ROOTFS/var/lib/postgresql"
 HOSTS_MOUNT="$ROOTFS/etc/hosts"
 mkdir -p "$MOUNT_ROOT" "$ROOTFS/run"
 if [[ "$REMOTE" == 0 ]]; then mkdir -p "$DATA_MOUNT"; fi
-mount --bind "$BACKUP_DIR" "$MOUNT_ROOT"
-mounted_backup=1
 cleanup() {
-  rm -f "$PASS_FILE" "$CA_FILE"
-  if [[ "${mounted_hosts:-0}" == 1 ]]; then umount "$HOSTS_MOUNT" 2>/dev/null || true; fi
-  if [[ "${mounted_backup:-0}" == 1 ]]; then umount "$MOUNT_ROOT" 2>/dev/null || true; fi
-  if [[ "${mounted_data:-0}" == 1 ]]; then umount "$DATA_MOUNT" 2>/dev/null || true; fi
+  local result=$? cleanup_result=0
+  trap - EXIT
+  rm -f "$PASS_FILE" "$CA_FILE" || cleanup_result=1
+  if [[ "${mounted_hosts:-0}" == 1 ]]; then umount "$HOSTS_MOUNT" || cleanup_result=1; fi
+  if [[ "${mounted_backup:-0}" == 1 ]]; then umount "$MOUNT_ROOT" || cleanup_result=1; fi
+  if [[ "${mounted_data:-0}" == 1 ]]; then umount "$DATA_MOUNT" || cleanup_result=1; fi
+  if (( result == 0 )); then result=$cleanup_result; fi
+  exit "$result"
 }
 trap cleanup EXIT
+mount --bind "$BACKUP_DIR" "$MOUNT_ROOT"
+mounted_backup=1
 if [[ "$REMOTE" == 0 ]]; then
   mount --bind "$DATA_DIR" "$DATA_MOUNT"
   mounted_data=1
@@ -162,7 +224,7 @@ prepare_combine_output() {
 run_pg() {
   local -a env_args=(LANG=C.UTF-8 LC_ALL=C.UTF-8 PGPASSFILE=/run/chroot-pg-backup.pgpass PGSSLMODE="$SSL_MODE")
   if [[ "$SSL_MODE" == verify-ca || "$SSL_MODE" == verify-full ]]; then env_args+=(PGSSLROOTCERT=/run/chroot-pg-backup-ca.pem); fi
-  chroot --userspec="$run_uid:$run_gid" "$ROOTFS" /usr/bin/env "${env_args[@]}" "$@"
+  run_tool chroot --userspec="$run_uid:$run_gid" "$ROOTFS" /usr/bin/env "${env_args[@]}" "$@"
 }
 
 json_result() {
