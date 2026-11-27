@@ -37,6 +37,11 @@ assert_clean(){ ! mountpoint -q "$point";! mountpoint -q "$datapoint"; }
 bash "$helper" "${args[@]}" > "$fixture/result" 2> "$fixture/log"
 assert_clean
 grep -q '"path"' "$fixture/result"
+if [[ "$engine" == postgres ]]; then
+  bash "$helper" --rootfs "$root" --data-dir "$data" --credentials-file "$fixture/credentials" --backup-dir "$backup" --set-id test --output "$backup/sets/test/incremental/inc-1" --base-manifest "$backup/full/backup_manifest" backup-incremental > /dev/null 2> "$fixture/log"
+  [[ "$(stat -c %a "$backup/sets/test/incremental")" == 750 ]]
+  assert_clean
+fi
 # Failure must propagate, and neither mount may escape its namespace.
 if BACKUP_TEST_EXIT=7 bash "$helper" "${args[@]}" > /dev/null 2> "$fixture/log";then echo 'tool failure was hidden' >&2;exit 1;fi
 assert_clean

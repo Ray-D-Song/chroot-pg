@@ -261,7 +261,8 @@ case "$ACTION" in
     json_result "$wal_path" "$wal_path" ;;
   backup-full)
     output="${OUTPUT:-$set_root/full}"
-    mkdir -p "$output"; chown -R "$run_uid:$run_gid" "$output"
+    OUTPUT="$output"
+    prepare_combine_output
     prepare_tablespace_destinations
     backup_args=(/usr/lib/postgresql/17/bin/pg_basebackup -w -h "$HOST" -p "$PORT" -U "$PG_USER" \
       -D "$(map_path "$output")" -Fp -X stream -c fast -P --manifest-checksums=SHA256)
@@ -278,7 +279,8 @@ case "$ACTION" in
   backup-incremental)
     [[ -n "$BASE_MANIFEST" ]] || die 'base-manifest is required'
     output="${OUTPUT:-$set_root/incremental/$(date +%s)}"
-    mkdir -p "$output"; chown -R "$run_uid:$run_gid" "$output"
+    OUTPUT="$output"
+    prepare_combine_output
     prepare_tablespace_destinations
     backup_args=(/usr/lib/postgresql/17/bin/pg_basebackup -w -h "$HOST" -p "$PORT" -U "$PG_USER" \
       -D "$(map_path "$output")" -Fp -X stream -c fast -P \
